@@ -1,0 +1,43 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Archivos temporales y cachés de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.tmp
+*.temp
+*.log
+
+# Variables de entorno
+.env
+.env.*
+
+# Posibles credenciales y claves privadas
+.aws/
+.azure/
+.gcloud/
+.ssh/
+.streamlit/secrets.toml
+credentials*.json
+credentials*.yaml
+credentials*.yml
+secrets*.json
+secrets*.yaml
+secrets*.yml
+secrets*.toml
+service-account*.json
+service_account*.json
+client_secret*.json
+*_credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
