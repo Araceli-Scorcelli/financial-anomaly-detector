@@ -2,3 +2,6 @@ pandas
 numpy
 scikit-learn
 streamlit
+sqlalchemy
+psycopg[binary]
+python-dotenv

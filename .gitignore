@@ -19,6 +19,7 @@ __pycache__/
 # Variables de entorno
 .env
 .env.*
+!.env.example
 
 # Posibles credenciales y claves privadas
 .aws/
