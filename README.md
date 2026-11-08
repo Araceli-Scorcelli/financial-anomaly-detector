@@ -36,7 +36,10 @@ La etapa 4A prepara esos movimientos y agrega tres características numéricas:
 `monto_relativo`, `rareza_horaria` y `movimientos_5min`. Separa el ajuste de
 referencias de su aplicación a nuevas transacciones, sin utilizar etiquetas.
 
-Todavía no se implementan modelos de ML, interfaz Streamlit ni conexiones bancarias.
+La etapa 4B incorpora Isolation Forest y una evaluación sobre transacciones
+posteriores al entrenamiento. Las etiquetas se consultan después de generar las
+predicciones, únicamente para medir resultados. Todavía no se implementan interfaz
+Streamlit ni conexiones bancarias.
 
 ## Estructura
 
@@ -50,14 +53,16 @@ financial-anomaly-detector/
 │   ├── generar_dataset.py         # Generador reproducible.
 │   ├── database.py                # Configuración y conexión de solo lectura.
 │   ├── verificar_conexion.py      # Verificación manual y lectura con Pandas.
-│   └── preparar_datos.py          # Validación, referencias y características.
+│   ├── preparar_datos.py          # Validación, referencias y características.
+│   └── entrenar_modelo.py         # Isolation Forest y evaluación cronológica.
 ├── sql/
 │   ├── crear_tablas.sql           # Estructura e indicaciones de importación.
 │   └── consultas_exploratorias.sql # Consultas de lectura en pgAdmin.
 ├── tests/
 │   ├── test_generar_dataset.py    # Validaciones del dataset con unittest.
 │   ├── test_database.py           # Pruebas de conexión sin una base real.
-│   └── test_preparar_datos.py     # Características con datos ficticios, sin DB.
+│   ├── test_preparar_datos.py     # Características con datos ficticios, sin DB.
+│   └── test_entrenar_modelo.py    # Separación, modelo y métricas sin DB.
 ├── .env.example        # Plantilla versionada, sin credenciales reales.
 ├── README.md           # Descripción, instalación y alcance.
 ├── requirements.txt    # Dependencias de Python.
@@ -88,8 +93,8 @@ intérprete, desde la raíz:
 ```
 
 Pandas y NumPy se usan para generar los datos. SQLAlchemy, `psycopg[binary]`
-y `python-dotenv` permiten leer PostgreSQL desde Python. Scikit-learn y
-Streamlit se reservan para las siguientes etapas.
+y `python-dotenv` permiten leer PostgreSQL desde Python. Scikit-learn se usa
+para Isolation Forest y sus métricas. Streamlit se reserva para la siguiente etapa.
 
 ## Lectura de PostgreSQL desde Python
 
@@ -242,7 +247,7 @@ hay diferencias, se rechaza para evitar resultados ambiguos. Para procesar lotes
 nuevos, pasar el historial observado junto con las transacciones del lote. Las
 referencias permanecen fijas hasta un nuevo ajuste explícito.
 
-Antes de evaluar un modelo habrá que separar cronológicamente las transacciones:
+Antes de evaluar un modelo hay que separar cronológicamente las transacciones:
 ajustar referencias con el período anterior y transformar el período futuro,
 aportando el historial disponible para los conteos. Por ejemplo, con esos dos
 DataFrames ya separados:
@@ -272,7 +277,7 @@ columnas. No guarda CSV ni modifica PostgreSQL.
 La demostración ajusta y transforma los mismos 1500 movimientos únicamente para
 explorar las características: **no constituye una evaluación válida**. No lee
 etiquetas ni usa los horarios o reglas del generador como patrones predefinidos.
-Todavía no hay entrenamiento de Isolation Forest ni umbrales de detección.
+Este comando no entrena un modelo ni aplica umbrales; la etapa 4B lo hace por separado.
 
 Las pruebas de `tests/test_preparar_datos.py` usan pequeños ejemplos ficticios sin
 PostgreSQL ni etiquetas reales. Cubren validación, medianas, distribución horaria,
@@ -281,6 +286,127 @@ separación entre ajuste y transformación. Ejecutar la suite desde la raíz:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+## Etapa 4B: Isolation Forest y evaluación
+
+Isolation Forest separa observaciones mediante cortes aleatorios en sus variables.
+Una operación que se aísla con pocos cortes resulta más inusual para el modelo.
+Se entrena sin etiquetas usando solo `monto_relativo`, `rareza_horaria` y
+`movimientos_5min`, reutilizadas de 4A, sin escalador adicional. Los identificadores,
+las fechas y los demás campos originales se conservan para revisar resultados,
+pero no son entradas del modelo.
+
+`separar_cronologicamente(df, fraccion_entrenamiento=0.8)` ordena por
+`fecha_hora` y `transaccion_id`: usa el primer 80 % para entrenamiento y el resto
+para evaluación. Si el corte divide operaciones con la misma fecha y hora, todo
+ese grupo pasa a evaluación; por eso la proporción es aproximada. Rechaza cortes
+que dejan un conjunto vacío. No distribuye las anomalías entre conjuntos usando
+sus etiquetas.
+
+`entrenar_y_predecir(transacciones)` realiza la separación, ajusta las referencias
+exclusivamente con entrenamiento y transforma ambos conjuntos con esas referencias
+fijas. Para los cinco minutos, entrenamiento usa su propio lote; evaluación agrega
+el historial de entrenamiento y las operaciones previas de su mismo lote,
+respetando el orden causal de 4A. Ninguna operación futura entra en un conteo.
+Las anomalías que pueda contener entrenamiento no se eliminan con etiquetas.
+
+La configuración se fija antes de consultar las etiquetas:
+
+```python
+IsolationForest(
+    n_estimators=200, max_samples="auto", contamination="auto",
+    max_features=1.0, bootstrap=False, random_state=42, n_jobs=1,
+)
+```
+
+Son 200 árboles; cada uno usa hasta `min(256, n_entrenamiento)` observaciones y
+las tres variables. La semilla permite reproducir el entrenamiento. No se ajustan
+parámetros mirando los resultados de evaluación.
+
+El puntaje es `puntaje_anomalia = -modelo.score_samples(caracteristicas)`:
+cuanto mayor, más inusual considera el modelo una operación. Con
+`contamination="auto"`, el criterio es `prediccion_anomalia = 1` si el puntaje
+es estrictamente mayor que `0.5`; en igualdad, es `0`. El puntaje no es una
+probabilidad de fraude y la configuración no obliga a detectar un 2 % de casos.
+El umbral determina las alertas; no usa el porcentaje conocido de anomalías
+sintéticas. El signo del puntaje y el umbral se corresponden con la
+[documentación de IsolationForest](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html).
+
+La función devuelve `ResultadoEntrenamiento`, que contiene el modelo, las
+referencias, el entrenamiento preparado con once columnas y las predicciones
+del período de evaluación con esas once columnas más `puntaje_anomalia` y
+`prediccion_anomalia`. No guarda el modelo ni los resultados en archivos.
+
+Para ejecutar desde la raíz, con PostgreSQL disponible y la configuración local
+de la etapa 3:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.entrenar_modelo
+```
+
+También se admite `.\.venv\Scripts\python.exe src\entrenar_modelo.py`. El comando
+reutiliza la lectura protegida de PostgreSQL y cierra sus recursos antes de
+entrenar. Genera todas las predicciones y recién entonces lee
+`data/etiquetas_evaluacion.csv` con `cargar_etiquetas`. Valida identificadores
+únicos y su correspondencia con todos los movimientos recuperados, y vincula
+las etiquetas con las predicciones uno a uno mediante `transaccion_id`.
+Las métricas se calculan únicamente sobre evaluación; las etiquetas no ajustan
+referencias, modelo ni umbral. No modifica PostgreSQL, los CSV ni el generador.
+
+El informe muestra cantidades y períodos de ambos conjuntos, las cuentas distintas
+recuperadas, parámetros y umbral, anomalías reales y alertas, y los diez puntajes más altos del período de
+evaluación con sus identificadores, fechas, cuentas, características y predicción.
+Para interpretar sus métricas:
+
+- **Verdaderos positivos (TP)**: anomalías reales que recibieron alerta.
+- **Falsos positivos (FP)**: movimientos normales que recibieron alerta y
+  requerirían una revisión innecesaria.
+- **Falsos negativos (FN)**: anomalías reales que el modelo omitió.
+- **Precisión**, `TP / (TP + FP)`: qué proporción de las alertas era anómala.
+- **Recall**, `TP / (TP + FN)`: qué proporción de las anomalías fue detectada.
+- **F1**: media armónica de precisión y recall; resume ambas medidas.
+
+La matriz de confusión tiene filas reales `[normal, anomalía]` y columnas
+predichas `[normal, anomalía]`, es decir, `[[TN, FP], [FN, TP]]`; `TN` son los
+movimientos normales correctamente descartados. Si una métrica global tiene
+denominador cero, se informa `0` (`zero_division=0`) y debe leerse junto con las
+cantidades de casos.
+
+Para `importe_inusual`, `horario_atipico` y `concentracion` también se muestran
+casos reales, detectados, omitidos y recall. El modelo solo decide normal o
+anómalo: este desglose compara esa decisión con cada tipo real, no clasifica el
+tipo de anomalía. Si un tipo no aparece en evaluación, su recall se informa
+como **N/D**: la ausencia de ejemplos no demuestra éxito ni fracaso.
+
+Los resultados describen un único corte temporal de datos sintéticos. Puede haber
+muy pocos casos por tipo o tipos ausentes, y las anomalías presentes en
+entrenamiento pueden influir en las referencias y en el detector. Un buen
+resultado aquí no garantiza el mismo rendimiento en transacciones reales.
+Cambiar características, parámetros o umbral a partir de este informe requerirá
+otro conjunto de validación independiente; no debe usarse repetidamente este
+período como si siguiera siendo una prueba nueva.
+
+La primera ejecución real, verificada el 8 de noviembre de 2026 con Scikit-learn
+1.9.1, recuperó 1500 movimientos de 30 cuentas: 1200 para entrenamiento, hasta
+el 13 de marzo a las 09:25:21, y 300 para evaluación, desde el 13 de marzo a las
+09:30:51 hasta el 31 de marzo de 2026. Produjo 28 alertas: 3 verdaderos positivos
+y 25 falsos positivos, sin falsos negativos. La precisión fue 0.107143, el recall
+1.000000 y F1 0.193548; la matriz fue `[[272, 25], [0, 3]]`.
+
+En evaluación quedaron dos anomalías de importe y una de horario, todas
+detectadas, y ninguna de concentración. Por tanto, este corte no permite medir
+la detección de concentraciones. El recall del 100 % se apoya en solo tres casos
+y convive con baja precisión: 25 de las 28 alertas fueron falsas. Estos resultados
+no se utilizaron para cambiar los parámetros ni el umbral. Son un registro de
+esa ejecución; el comando calcula las métricas con los datos disponibles.
+
+Las pruebas de `tests/test_entrenar_modelo.py` usan ejemplos ficticios sin
+PostgreSQL ni etiquetas reales. Para ejecutar toda la suite tratando las
+advertencias como errores:
+
+```powershell
+.\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
 ```
 
 ## Generación y validación
