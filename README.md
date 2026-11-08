@@ -29,8 +29,12 @@ y explorar los datos. En el entorno local ya se crearon la base
 `financial_anomalies` y la tabla, y se importaron los 1500 movimientos de 30 cuentas.
 La tercera etapa agrega la lectura desde Python con SQLAlchemy, Psycopg 3 y
 Pandas, usando una conexión de solo lectura y configuración local en `.env`.
-La conexión real desde Python queda pendiente de la comprobación manual descrita
-más abajo.
+La conexión real desde Python ya se verificó: `SELECT 1` devolvió `1` y se
+recuperaron 1500 movimientos de 30 cuentas.
+
+La etapa 4A prepara esos movimientos y agrega tres características numéricas:
+`monto_relativo`, `rareza_horaria` y `movimientos_5min`. Separa el ajuste de
+referencias de su aplicación a nuevas transacciones, sin utilizar etiquetas.
 
 Todavía no se implementan modelos de ML, interfaz Streamlit ni conexiones bancarias.
 
@@ -45,13 +49,15 @@ financial-anomaly-detector/
 ├── src/
 │   ├── generar_dataset.py         # Generador reproducible.
 │   ├── database.py                # Configuración y conexión de solo lectura.
-│   └── verificar_conexion.py      # Verificación manual y lectura con Pandas.
+│   ├── verificar_conexion.py      # Verificación manual y lectura con Pandas.
+│   └── preparar_datos.py          # Validación, referencias y características.
 ├── sql/
 │   ├── crear_tablas.sql           # Estructura e indicaciones de importación.
 │   └── consultas_exploratorias.sql # Consultas de lectura en pgAdmin.
 ├── tests/
 │   ├── test_generar_dataset.py    # Validaciones del dataset con unittest.
-│   └── test_database.py           # Pruebas de conexión sin una base real.
+│   ├── test_database.py           # Pruebas de conexión sin una base real.
+│   └── test_preparar_datos.py     # Características con datos ficticios, sin DB.
 ├── .env.example        # Plantilla versionada, sin credenciales reales.
 ├── README.md           # Descripción, instalación y alcance.
 ├── requirements.txt    # Dependencias de Python.
@@ -152,9 +158,8 @@ el modo `READ ONLY` del cliente no reemplaza los permisos del servidor.
 El verificador comprueba que `SELECT 1` devuelva `1` y lee las ocho columnas de
 `public.transacciones`, ordenadas por `fecha_hora` y `transaccion_id`. Muestra la
 cantidad de filas cargadas, las cuentas únicas, los tipos de datos y las primeras
-cinco filas del DataFrame. Con la importación actual se esperan **1500 movimientos
+cinco filas del DataFrame. La verificación real confirmó **1500 movimientos
 y 30 cuentas**; los valores mostrados se calculan a partir de los datos leídos.
-Esta expectativa no reemplaza una ejecución manual contra la base local.
 
 El importe `monto` conserva los valores `Decimal` de PostgreSQL mediante
 [`pandas.read_sql_query(..., coerce_float=False)`](https://pandas.pydata.org/docs/reference/api/pandas.read_sql_query.html),
@@ -174,6 +179,109 @@ Una ejecución correcta termina con código de salida `0`; un error termina con
 `1` y un mensaje sin mostrar la URL ni las credenciales. Ante un error, revisar
 que PostgreSQL esté encendido, las cinco variables locales, el puerto y los
 permisos del usuario sobre la base, el esquema y la tabla.
+
+## Etapa 4A: preparación y características
+
+La ingeniería de características transforma datos originales en medidas útiles
+para un modelo. Estas tres variables representan un importe inusual, un horario
+poco frecuente y una concentración de operaciones de la misma cuenta. Un valor
+alto indica mayor intensidad de ese comportamiento; por sí solo no demuestra
+fraude ni determina que una transacción sea anómala.
+
+`validar_y_convertir(df)` devuelve una copia de las ocho columnas originales,
+convierte `monto` de `Decimal` a `float64` y comprueba que `fecha_hora` sea
+datetime. Rechaza identificadores duplicados, datos faltantes e importes no
+positivos o no finitos. No usa el índice como identificador ni elimina filas.
+La conversión a punto flotante permite el procesamiento numérico, aunque pierde
+la representación decimal exacta usada para almacenar dinero.
+
+El procesamiento distingue dos pasos: `ajustar_referencias(referencia)` estima
+las medianas y distribuciones horarias y devuelve un objeto `Referencias`;
+`transformar_datos(transacciones, referencias, historial=None)` aplica esos
+valores fijos, sin volver a ajustarlos. Devuelve las ocho columnas originales y
+las tres nuevas, conservando el orden, los identificadores y el índice de entrada,
+incluso si ese índice tiene valores repetidos.
+
+- **`monto_relativo`**: divide el importe por la mediana de su cuenta en la
+  referencia. Un resultado de `1` equivale a esa mediana; `3` significa tres
+  veces ese importe. La mediana reduce la influencia de extremos frente al
+  promedio, pero las anomalías de la referencia también pueden afectarla.
+  Cuentas con menos de cinco observaciones y cuentas nuevas usan la mediana
+  global de la referencia. El mínimo se configura con `min_observaciones` al
+  ajustar. Una referencia vacía se rechaza.
+- **`rareza_horaria`**: agrupa las horas en 24 intervalos (`0` a `23`). Para cada
+  cuenta, si `c_h` es la cantidad de operaciones en la hora `h`, suaviza los
+  conteos con `s_h = 0.25*c_(h-1) + 0.5*c_h + 0.25*c_(h+1)`. Las horas son
+  circulares: `23` y `0` son vecinas. Luego aplica
+  `p_h = (s_h + 1) / (n + 24)`, donde `n` es la cantidad de operaciones de
+  referencia de esa cuenta, y calcula `rareza_horaria = -ln(p_h)`. Las
+  probabilidades suman `1` y nunca son cero. Una hora más frecuente tiene menor
+  rareza; una menos frecuente tiene mayor rareza. Cuentas con pocas observaciones
+  o nuevas usan la distribución global calculada del mismo modo.
+- **`movimientos_5min`**: cuenta operaciones de la misma cuenta en el intervalo
+  inclusivo `[t - 5 minutos, t]`, incluida la actual. Ordena por cuenta, fecha
+  y `transaccion_id` en orden lexicográfico. Para operaciones simultáneas cuenta
+  la actual y los identificadores anteriores, sin anticipar los posteriores.
+  `calcular_movimientos_5min(transacciones, historial=None)` también permite
+  obtener este conteo por separado; su resultado es `int64`.
+
+El suavizado horario reparte información entre horas vecinas y agrega una
+observación por hora (Laplace), evitando asignar probabilidad cero a horarios
+sin antecedentes. Sus 24 observaciones adicionales tienen bastante peso con
+cuentas pequeñas. El cálculo ignora los minutos dentro de cada hora, y el
+respaldo global mezcla perfiles personales y comerciales. Las distintas
+cantidades de observaciones por cuenta también afectan la estimación; estas
+probabilidades describen horarios, **no son probabilidades de fraude**.
+
+El historial para los cinco minutos se pasa explícitamente: ajustar referencias
+no lo guarda ni lo incorpora automáticamente al conteo. Para cada objetivo solo
+se consideran movimientos anteriores según el orden indicado; registros futuros
+del historial no influyen en objetivos pasados. Un ID presente tanto en historial
+como en objetivos se cuenta una sola vez si sus datos originales coinciden; si
+hay diferencias, se rechaza para evitar resultados ambiguos. Para procesar lotes
+nuevos, pasar el historial observado junto con las transacciones del lote. Las
+referencias permanecen fijas hasta un nuevo ajuste explícito.
+
+Antes de evaluar un modelo habrá que separar cronológicamente las transacciones:
+ajustar referencias con el período anterior y transformar el período futuro,
+aportando el historial disponible para los conteos. Por ejemplo, con esos dos
+DataFrames ya separados:
+
+```python
+from src.preparar_datos import ajustar_referencias, transformar_datos
+
+referencias = ajustar_referencias(transacciones_anteriores)
+preparadas = transformar_datos(
+    transacciones_nuevas, referencias, historial=transacciones_anteriores
+)
+```
+
+Para ejecutar la demostración con PostgreSQL desde la raíz:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.preparar_datos
+```
+
+También se admite `.\.venv\Scripts\python.exe src\preparar_datos.py`. Reutiliza
+`crear_engine` y `cargar_transacciones` de los módulos existentes y la misma
+configuración local de solo lectura. Muestra filas procesadas, cuentas distintas,
+las primeras cinco filas, tipos y estadísticas descriptivas de las tres variables,
+y comprueba la ausencia de nulos e infinitos. El DataFrame resultante tiene once
+columnas. No guarda CSV ni modifica PostgreSQL.
+
+La demostración ajusta y transforma los mismos 1500 movimientos únicamente para
+explorar las características: **no constituye una evaluación válida**. No lee
+etiquetas ni usa los horarios o reglas del generador como patrones predefinidos.
+Todavía no hay entrenamiento de Isolation Forest ni umbrales de detección.
+
+Las pruebas de `tests/test_preparar_datos.py` usan pequeños ejemplos ficticios sin
+PostgreSQL ni etiquetas reales. Cubren validación, medianas, distribución horaria,
+medianoche, cuentas con pocos datos, conteos causales, empates, historial y la
+separación entre ajuste y transformación. Ejecutar la suite desde la raíz:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
 ## Generación y validación
 
