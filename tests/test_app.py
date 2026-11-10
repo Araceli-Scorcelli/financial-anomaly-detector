@@ -72,6 +72,13 @@ class FiltrosTests(unittest.TestCase):
         tabla = app.preparar_tabla(entrada.iloc[::-1])
         self.assertEqual(tabla.transaccion_id.tolist(), ["E1", "E2", "E3", "E4"])
         self.assertEqual(tabla.estado.tolist(), ["Alerta potencial", "Alerta potencial", "Normal", "Normal"])
+        self.assertEqual(tabla.columns.tolist(), [
+            "transaccion_id", "cuenta_id", "fecha_hora", "monto", "estado", "puntaje_anomalia",
+            "monto_relativo", "rareza_horaria", "movimientos_5min",
+        ])
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(tabla.fecha_hora))
+        self.assertTrue(pd.api.types.is_float_dtype(tabla.monto))
+        self.assertEqual(tabla.puntaje_anomalia.tolist(), [0.8, 0.7, 0.3, 0.2])
         self.assertNotIn("es_anomalia", tabla)
         self.assertNotIn("tipo_anomalia", tabla)
 
@@ -137,6 +144,28 @@ class CargaYAplicacionTests(unittest.TestCase):
         self.mocks[3].assert_called_once()
         self.mocks[4].assert_called_once()
         self.engine.dispose.assert_called_once()
+
+    def test_presentacion_metricas_y_detalle_tecnico_no_cambian_resultados(self):
+        aplicacion = self.iniciar()
+        globales = [(m.label, m.value) for m in aplicacion.metric[:6]]
+        grilla = aplicacion.get_by_key("indicadores_globales")
+        self.assertEqual(len(grilla.metric), 6)
+        self.assertEqual(globales[4], ("Recall", "100,00%"))
+        self.assertTrue(all(m.proto.help for m in grilla.metric))
+        principales = ["transaccion_id", "cuenta_id", "fecha_hora", "monto", "estado", "puntaje_anomalia"]
+        tabla_inicial = aplicacion.dataframe[0].value.copy()
+        self.assertEqual(tabla_inicial.columns.tolist(), principales)
+        aplicacion.toggle(key="mostrar_caracteristicas").set_value(True).run()
+        self.assertEqual(len(aplicacion.exception), 0)
+        tabla_detallada = aplicacion.dataframe[0].value
+        self.assertEqual(tabla_detallada.columns.tolist(), principales + [
+            "monto_relativo", "rareza_horaria", "movimientos_5min",
+        ])
+        pd.testing.assert_frame_equal(tabla_inicial, tabla_detallada[principales])
+        self.assertEqual([(m.label, m.value) for m in aplicacion.metric[:6]], globales)
+        self.mocks[2].assert_called_once()
+        self.mocks[3].assert_called_once()
+        self.mocks[4].assert_called_once()
 
     def test_actualizar_recarga_una_vez_y_restablece_filtros(self):
         aplicacion = self.iniciar()

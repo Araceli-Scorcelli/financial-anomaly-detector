@@ -82,26 +82,12 @@ def preparar_tabla(predicciones: pd.DataFrame) -> pd.DataFrame:
     """Presentación de predicciones, sin incorporar etiquetas individuales."""
     datos = predicciones.sort_values(["puntaje_anomalia", "transaccion_id"], ascending=[False, True]).copy()
     datos["estado"] = datos["prediccion_anomalia"].map({1: "Alerta potencial", 0: "Normal"})
-    return datos[["transaccion_id", "cuenta_id", "fecha_hora", "estado", "monto", "puntaje_anomalia",
+    return datos[["transaccion_id", "cuenta_id", "fecha_hora", "monto", "estado", "puntaje_anomalia",
                   "monto_relativo", "rareza_horaria", "movimientos_5min"]]
 
 
 def main() -> None:
-    st.set_page_config(page_title="Financial Anomaly Detector", page_icon="📊", layout="wide")
-    st.markdown("""
-    <style>
-    .block-container {max-width: 1500px; padding-top: 2rem; padding-bottom: 2rem;}
-    h1 {letter-spacing: -0.045em; font-weight: 750;}
-    h2, h3 {letter-spacing: -0.02em;}
-    .eyebrow {color: #0f766e; font-size: .76rem; font-weight: 700; letter-spacing: .13em; margin-bottom: .2rem;}
-    [data-testid="stMetric"] {background: #fff; border-radius: 12px;}
-    [data-testid="stMetricValue"] {font-size: 1.8rem; font-weight: 650;}
-    [data-testid="stMetricLabel"] {color: #526176; font-size: .85rem;}
-    [data-testid="stSidebar"] {border-right: 1px solid #dce4ed;}
-    [data-testid="stSidebar"] h2 {font-size: 1.15rem;}
-    </style>
-    """, unsafe_allow_html=True)
-    st.markdown('<p class="eyebrow">DATA SCIENCE · ANÁLISIS EXPLORATORIO</p>', unsafe_allow_html=True)
+    st.set_page_config(page_title="Financial Anomaly Detector", page_icon=":material/analytics:", layout="wide")
     st.title("Financial Anomaly Detector")
     st.markdown("Explorá movimientos bancarios sintéticos y revisá **anomalías potenciales** con Isolation Forest.")
 
@@ -143,8 +129,9 @@ def main() -> None:
         ("Recall", f"{datos['recall']:.2%}".replace(".", ","), "Proporción de anomalías etiquetadas que el modelo detectó."),
         ("F1-score", f"{datos['f1']:.2%}".replace(".", ","), "Media armónica de precisión y recall."),
     ]
-    for columna, (etiqueta, valor, ayuda) in zip(st.columns(6), indicadores):
-        columna.metric(etiqueta, valor, help=ayuda, border=True)
+    with st.grid(3, min_column_width=260, gap="small", key="indicadores_globales"):
+        for etiqueta, valor, ayuda in indicadores:
+            st.metric(etiqueta, valor, help=ayuda, border=True, height="stretch")
     ausentes = datos["por_tipo"].loc[datos["por_tipo"]["reales"] == 0, "tipo_anomalia"].tolist()
     aviso = (f"Evaluación histórica sobre {reales} anomalías sintéticas: {tp} detectadas, {fn} no detectadas "
              f"y {fp} falsas alertas. ")
@@ -161,7 +148,8 @@ def main() -> None:
                               key="filtro_cuenta")
         fechas = st.date_input("Rango de fechas", value=(primera, ultima), min_value=primera,
                                max_value=ultima, format="DD/MM/YYYY", key="filtro_fechas")
-        resultado = st.radio("Resultado", ["Todas", "Alertas", "Normales"], key="filtro_resultado")
+        resultado = st.radio("Resultado", ["Todas", "Alertas", "Normales"], key="filtro_resultado",
+                             help="Normales significa sin alerta del modelo; no es una validación de la operación.")
         st.caption("Los filtros solo cambian la tabla y el gráfico. El modelo y sus referencias permanecen fijos.")
         st.divider()
         st.caption(f"Resultados cargados: {datos['actualizado']:%d/%m/%Y %H:%M %Z}")
@@ -187,23 +175,47 @@ def main() -> None:
                               index=pd.Index(["Vista filtrada"], name="Selección"))
         st.bar_chart(conteo, y=["Normales", "Alertas"], color=["#0f766e", "#d97706"],
                      horizontal=True, stack=False, height=180, width="stretch",
-                     x_label="Movimientos", alt="Cantidad de operaciones normales y alertas de la vista filtrada.")
+                     x_label="", y_label="Movimientos",
+                     alt="Cantidad de operaciones normales y alertas de la vista filtrada.")
     st.caption(f"Puntaje mayor = operación más inusual · Alerta si puntaje > {datos['umbral']:.2f} · El puntaje no es una probabilidad")
+    mostrar_caracteristicas = st.toggle(
+        "Mostrar características técnicas", key="mostrar_caracteristicas",
+        help="Agrega monto relativo, rareza horaria y movimientos en cinco minutos al final de la tabla. No recalcula el modelo.",
+    )
     tabla = preparar_tabla(filtradas)
+    if not mostrar_caracteristicas:
+        tabla = tabla.iloc[:, :6]
     estilo = tabla.style.map(lambda estado: "background-color: #fff3d6; color: #8a4b08; font-weight: 600;"
                             if estado == "Alerta potencial" else "color: #526176;", subset=["estado"])
     st.dataframe(estilo, hide_index=True, width="stretch", height=410, row_height=36,
+                 alt="Transacciones del conjunto de evaluación, ordenadas por puntaje de anomalía, con su resultado.",
                  column_config={
-                     "transaccion_id": st.column_config.TextColumn("Transacción"),
-                     "cuenta_id": st.column_config.TextColumn("Cuenta"),
-                     "fecha_hora": st.column_config.DatetimeColumn("Fecha y hora", format="DD/MM/YYYY HH:mm:ss"),
-                     "estado": st.column_config.TextColumn("Resultado", width="medium"),
-                     "monto": st.column_config.NumberColumn("Monto (ARS)", format="$ %.2f"),
-                     "puntaje_anomalia": st.column_config.NumberColumn("Puntaje", format="%.4f"),
-                     "monto_relativo": st.column_config.NumberColumn("Monto relativo", format="%.2f"),
-                     "rareza_horaria": st.column_config.NumberColumn("Rareza horaria", format="%.2f"),
-                     "movimientos_5min": st.column_config.NumberColumn("Movimientos / 5 min", format="%d"),
+                     "transaccion_id": st.column_config.TextColumn("Transacción", width=110, pinned=True),
+                     "cuenta_id": st.column_config.TextColumn("Cuenta", width=90),
+                     "fecha_hora": st.column_config.DatetimeColumn("Fecha y hora", format="DD/MM/YYYY HH:mm:ss", width=185),
+                     "monto": st.column_config.NumberColumn("Importe (ARS)", format="ARS %,.2f", width=155),
+                     "estado": st.column_config.TextColumn("Resultado", width=165,
+                                                          help="Decisión del detector: alerta potencial o sin alerta. No es una confirmación de fraude."),
+                     "puntaje_anomalia": st.column_config.NumberColumn("Puntaje", format="%.4f", width=100,
+                                                                      help="Mayor puntaje indica mayor rareza. Se muestran cuatro decimales; la decisión utiliza la precisión completa."),
+                     "monto_relativo": st.column_config.NumberColumn("Monto relativo", format="%.2f",
+                                                                    help="Importe dividido por la mediana de referencia estimada con entrenamiento."),
+                     "rareza_horaria": st.column_config.NumberColumn("Rareza horaria", format="%.2f",
+                                                                    help="Un valor mayor describe un horario menos frecuente en la referencia."),
+                     "movimientos_5min": st.column_config.NumberColumn("Movimientos / 5 min", format="%d",
+                                                                       help="Operaciones de la cuenta en los cinco minutos anteriores, incluida la actual."),
                  })
+    with st.expander("Cómo leer las características"):
+        st.markdown(
+            "- **Monto relativo:** compara el importe con su mediana de referencia. "
+            "Un valor de 1 equivale a esa mediana; 3 significa tres veces ese importe.\n"
+            "- **Rareza horaria:** aumenta cuanto menos frecuente es la hora en los movimientos de referencia.\n"
+            "- **Movimientos en cinco minutos:** cuenta las operaciones de la misma cuenta durante "
+            "los cinco minutos anteriores, incluida la actual. Un valor mayor describe más concentración."
+        )
+        st.caption("Estas características describen el movimiento. No son una explicación causal de cada alerta "
+                   "ni permiten atribuirla a una variable específica. Isolation Forest combina las tres "
+                   "para asignar un puntaje; una alerta potencial no confirma fraude.")
     with st.expander("Cómo interpretar esta evaluación"):
         st.markdown(
             "**Precisión:** cuántas alertas coinciden con las etiquetas. **Recall:** cuántas anomalías "
@@ -215,6 +227,7 @@ def main() -> None:
         st.dataframe(datos["por_tipo"].rename(columns={"tipo_anomalia": "Tipo real", "reales": "Casos",
                                                       "detectadas": "Detectadas", "no_detectadas": "Omitidas",
                                                       "recall": "Recall"}), hide_index=True, width="stretch",
+                     alt="Resultados históricos de evaluación por tipo real de anomalía, con su cantidad de casos.",
                      column_config={"Recall": st.column_config.NumberColumn(format="%.2f")})
         st.caption("Sin casos de un tipo, su recall no es evaluable. Un único corte temporal y pocos casos "
                    "no permiten asegurar generalización. Las anomalías en entrenamiento pueden influir en "

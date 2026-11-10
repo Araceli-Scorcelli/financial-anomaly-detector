@@ -5,6 +5,19 @@ backgroundColor = "#f8fafc"
 secondaryBackgroundColor = "#eef3f7"
 textColor = "#172b4d"
 font = "sans serif"
+borderColor = "#dce4ed"
+baseRadius = "0.75rem"
+showSidebarBorder = true
+metricValueFontSize = "2rem"
+metricValueFontWeight = 600
+paddingTop = "1.5rem"
+paddingBottom = "2rem"
+
+[theme.sidebar]
+backgroundColor = "#eef3f7"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#172b4d"
+paddingTop = "1rem"
 
 [server]
 address = "127.0.0.1"

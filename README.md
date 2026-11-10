@@ -433,7 +433,9 @@ El dashboard **Financial Anomaly Detector** muestra un resumen de los movimiento
 recuperados, cuentas y tamaños de entrenamiento y evaluación. Todas las cifras
 se calculan con los datos cargados. Sus seis indicadores globales corresponden
 al conjunto completo de evaluación: transacciones, alertas, anomalías reales,
-precisión, recall y F1. También advierte sobre la cantidad de casos reales, los
+precisión, recall y F1. Se distribuyen en una grilla de hasta tres columnas que
+se adapta al ancho disponible, manteniendo visibles los títulos y porcentajes.
+También advierte sobre la cantidad de casos reales, los
 falsos positivos y los tipos sin ejemplos de evaluación; el significado y las
 limitaciones de estas métricas son los de la etapa 4B.
 
@@ -442,6 +444,12 @@ Los filtros permiten elegir cuenta, fechas y resultado: **Todas**, **Alertas** o
 significa sin alerta del modelo. La vista muestra sus propios contadores, una
 tabla de transacciones de evaluación con identificadores, estado destacado,
 características y puntaje, y un gráfico de barras de alertas frente a normales.
+La tabla prioriza transacción, cuenta, fecha y hora, importe en ARS, resultado y
+puntaje. El interruptor **Mostrar características técnicas** agrega las tres
+variables al final, sin cambiar filas, predicciones ni métricas. Los importes
+muestran separadores de miles y dos decimales; los puntajes, cuatro decimales.
+La sección **Cómo leer las características** explica su significado y aclara que
+describen los movimientos, sin ofrecer una explicación causal de cada alerta.
 Los filtros afectan esa tabla, sus contadores y el gráfico; los seis indicadores
 globales permanecen referidos a toda la evaluación. Las etiquetas reales solo
 intervienen en las métricas históricas: no se usan para filtrar, entrenar ni
@@ -469,8 +477,8 @@ ficticios, sin conectarse a PostgreSQL. Para ejecutar toda la suite:
 .\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
 ```
 
-La verificación local de esta etapa aprobó **76 pruebas**: las 67 anteriores y
-9 de la aplicación. También se comprobó la interfaz con PostgreSQL real: mostró
+La verificación local tras la mejora visual aprobó **77 pruebas**: las 67 anteriores y
+10 de la aplicación. También se comprobó la interfaz con PostgreSQL real: mostró
 300 transacciones de evaluación y, al filtrar, conservó los puntajes y las seis
 métricas globales con una sola lectura y un solo entrenamiento. El servidor
 local inició correctamente y respondió con HTTP 200; se detuvo al terminar la
