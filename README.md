@@ -38,13 +38,19 @@ referencias de su aplicación a nuevas transacciones, sin utilizar etiquetas.
 
 La etapa 4B incorpora Isolation Forest y una evaluación sobre transacciones
 posteriores al entrenamiento. Las etiquetas se consultan después de generar las
-predicciones, únicamente para medir resultados. Todavía no se implementan interfaz
-Streamlit ni conexiones bancarias.
+predicciones, únicamente para medir resultados.
+
+La etapa 5 agrega una aplicación local de Streamlit para explorar las predicciones
+y revisar las métricas históricas. Reutiliza las etapas anteriores y mantiene la
+lectura de PostgreSQL sin modificar datos. Es una demostración académica con datos
+sintéticos; una alerta no confirma fraude. No se conecta con bancos reales.
 
 ## Estructura
 
 ```text
 financial-anomaly-detector/
+├── .streamlit/
+│   └── config.toml                # Tema visual de la aplicación local.
 ├── data/
 │   ├── transacciones.csv          # Dataset principal sin etiquetas.
 │   ├── etiquetas_evaluacion.csv   # Etiquetas separadas para evaluación.
@@ -62,7 +68,9 @@ financial-anomaly-detector/
 │   ├── test_generar_dataset.py    # Validaciones del dataset con unittest.
 │   ├── test_database.py           # Pruebas de conexión sin una base real.
 │   ├── test_preparar_datos.py     # Características con datos ficticios, sin DB.
-│   └── test_entrenar_modelo.py    # Separación, modelo y métricas sin DB.
+│   ├── test_entrenar_modelo.py    # Separación, modelo y métricas sin DB.
+│   └── test_app.py               # Interfaz con AppTest y datos ficticios.
+├── app.py              # Dashboard local de Streamlit.
 ├── .env.example        # Plantilla versionada, sin credenciales reales.
 ├── README.md           # Descripción, instalación y alcance.
 ├── requirements.txt    # Dependencias de Python.
@@ -94,7 +102,7 @@ intérprete, desde la raíz:
 
 Pandas y NumPy se usan para generar los datos. SQLAlchemy, `psycopg[binary]`
 y `python-dotenv` permiten leer PostgreSQL desde Python. Scikit-learn se usa
-para Isolation Forest y sus métricas. Streamlit se reserva para la siguiente etapa.
+para Isolation Forest y sus métricas. Streamlit presenta el dashboard local.
 
 ## Lectura de PostgreSQL desde Python
 
@@ -408,6 +416,65 @@ advertencias como errores:
 ```powershell
 .\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
 ```
+
+## Etapa 5: aplicación local con Streamlit
+
+Con PostgreSQL encendido y la configuración local de la etapa 3, ejecutar desde
+la raíz del proyecto:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+Abrir [http://localhost:8501](http://localhost:8501) en el navegador. Para detener
+el servidor, presionar **Ctrl+C** en la terminal.
+
+El dashboard **Financial Anomaly Detector** muestra un resumen de los movimientos
+recuperados, cuentas y tamaños de entrenamiento y evaluación. Todas las cifras
+se calculan con los datos cargados. Sus seis indicadores globales corresponden
+al conjunto completo de evaluación: transacciones, alertas, anomalías reales,
+precisión, recall y F1. También advierte sobre la cantidad de casos reales, los
+falsos positivos y los tipos sin ejemplos de evaluación; el significado y las
+limitaciones de estas métricas son los de la etapa 4B.
+
+Los filtros permiten elegir cuenta, fechas y resultado: **Todas**, **Alertas** o
+**Normales**. Las fechas incluyen los días seleccionados completos; «Normales»
+significa sin alerta del modelo. La vista muestra sus propios contadores, una
+tabla de transacciones de evaluación con identificadores, estado destacado,
+características y puntaje, y un gráfico de barras de alertas frente a normales.
+Los filtros afectan esa tabla, sus contadores y el gráfico; los seis indicadores
+globales permanecen referidos a toda la evaluación. Las etiquetas reales solo
+intervienen en las métricas históricas: no se usan para filtrar, entrenar ni
+mostrar la tabla operativa.
+
+Al cargar por primera vez, `cargar_resultados()` consulta PostgreSQL en modo de
+solo lectura, cierra sus recursos, ejecuta `entrenar_y_predecir` y luego carga las
+etiquetas para evaluar. Conserva una única entrada con resultados en memoria
+mediante `st.cache_data(max_entries=1)`, sin vencimiento automático. La caché es
+compartida por las sesiones del mismo servidor y cada ejecución recibe una copia;
+no conserva el modelo ni conexiones a la base y no persiste resultados en disco.
+Cambiar filtros reutiliza esos resultados, sin reajustar referencias ni reentrenar.
+
+El botón **Actualizar resultados** invalida esa caché, vuelve a consultar los
+datos y repite el entrenamiento y la evaluación. Usarlo cuando cambien los datos
+de PostgreSQL o las etiquetas. Reiniciar el servidor también borra la caché;
+si cambia `.env`, reiniciar el proceso para aplicar la configuración de conexión
+de la etapa 3.
+
+La aplicación es local y no publica el proyecto ni modifica PostgreSQL o los
+CSV. Las pruebas de `tests/test_app.py` usan `AppTest` de Streamlit con datos
+ficticios, sin conectarse a PostgreSQL. Para ejecutar toda la suite:
+
+```powershell
+.\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
+```
+
+La verificación local de esta etapa aprobó **76 pruebas**: las 67 anteriores y
+9 de la aplicación. También se comprobó la interfaz con PostgreSQL real: mostró
+300 transacciones de evaluación y, al filtrar, conservó los puntajes y las seis
+métricas globales con una sola lectura y un solo entrenamiento. El servidor
+local inició correctamente y respondió con HTTP 200; se detuvo al terminar la
+prueba. Estas comprobaciones no requieren abrir otro navegador durante la suite.
 
 ## Generación y validación
 
