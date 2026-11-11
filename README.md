@@ -50,6 +50,11 @@ entrenamiento creciente y bloques posteriores de evaluación sin solapamientos.
 Conserva el detector, sus parámetros y la evaluación 80/20 de las etapas anteriores.
 Se ejecuta desde consola y no cambia la aplicación Streamlit.
 
+La etapa 6B analiza los errores de esas predicciones: compara falsas alertas con
+normales correctamente clasificadas, distingue conteos de tasas por cuenta y
+ventana, y reconstruye las ráfagas etiquetadas para revisar omisiones y demoras.
+Es un diagnóstico posterior; no ajusta el detector a partir de los resultados.
+
 ## Estructura
 
 ```text
@@ -66,7 +71,8 @@ financial-anomaly-detector/
 │   ├── verificar_conexion.py      # Verificación manual y lectura con Pandas.
 │   ├── preparar_datos.py          # Validación, referencias y características.
 │   ├── entrenar_modelo.py         # Isolation Forest y evaluación cronológica.
-│   └── evaluacion_temporal.py     # Walk-forward, métricas y cobertura temporal.
+│   ├── evaluacion_temporal.py     # Walk-forward, métricas y cobertura temporal.
+│   └── analisis_errores.py        # Diagnóstico post hoc de errores y ráfagas.
 ├── sql/
 │   ├── crear_tablas.sql           # Estructura e indicaciones de importación.
 │   └── consultas_exploratorias.sql # Consultas de lectura en pgAdmin.
@@ -76,7 +82,8 @@ financial-anomaly-detector/
 │   ├── test_preparar_datos.py     # Características con datos ficticios, sin DB.
 │   ├── test_entrenar_modelo.py    # Separación, modelo y métricas sin DB.
 │   ├── test_app.py               # Interfaz con AppTest y datos ficticios.
-│   └── test_evaluacion_temporal.py # Ventanas, causalidad y métricas sin DB.
+│   ├── test_evaluacion_temporal.py # Ventanas, causalidad y métricas sin DB.
+│   └── test_analisis_errores.py   # Tasas, errores, ráfagas y diagnóstico sin DB.
 ├── app.py              # Dashboard local de Streamlit.
 ├── .env.example        # Plantilla versionada, sin credenciales reales.
 ├── README.md           # Descripción, instalación y alcance.
@@ -642,6 +649,208 @@ de conexión seguros. Se ejecutaron con:
 Después se ejecutó el comando real de esta etapa, confirmado en modo de solo
 lectura. Los resultados anteriores son el registro de esa ejecución; el comando
 los vuelve a calcular con los movimientos disponibles.
+
+## Etapa 6B: análisis de errores
+
+Para reproducir el diagnóstico desde la raíz del proyecto, con PostgreSQL activo
+y el `.env` local configurado:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -W error -m src.analisis_errores
+```
+
+Como las etapas anteriores no persisten modelos o predicciones, el comando
+reproduce una sola vez las tres ventanas mediante `predecir_ventanas`. Después
+de completar sus predicciones lee las etiquetas, llama a `evaluar_ventanas` y
+consume esas mismas tablas en `analizar_errores`. El diagnóstico no vuelve a
+ajustar referencias, transformar características, entrenar ni calcular puntajes.
+La conexión de solo lectura se cierra antes de entrenar. Todos los resultados
+quedan en memoria y se imprimen en consola; no se modifican archivos de datos.
+
+El informe clasifica cada operación evaluada como TP, FP, TN o FN por su ID y
+rechaza duplicados. Las tablas por cuenta, ventana y cuenta/ventana distinguen:
+
+- **FP:** cantidad absoluta de falsas alertas.
+- **Tasa de falsos positivos:** `FP / (FP + TN)`, sobre operaciones realmente
+  normales. Si no hay normales reales, se informa N/D.
+- **Proporción de falsas alertas:** `FP / total evaluado` del grupo.
+- **Tasa de alertas:** `(TP + FP) / total evaluado` del grupo.
+
+Se incluyen los denominadores y los grupos con cero FP. Una cuenta con más FP
+no necesariamente tiene una tasa mayor; tampoco una tasa alta con muy pocos
+casos demuestra que su comportamiento sea problemático. Las tasas describen
+solo el período evaluado, no toda la actividad histórica de la cuenta.
+
+Para FP y TN se muestran cantidad, media, mediana, cuartiles y extremos de las
+tres características y del puntaje, tanto agregados como por ventana. Son
+contrastes descriptivos, sin pruebas de significación ni atribuciones causales.
+Los puntajes y las referencias cambian entre modelos; por eso el desglose por
+ventana acompaña al resumen agregado. Se imprimen todas las omisiones y las
+diez falsas alertas de mayor puntaje, conservando sus IDs.
+
+La reconstrucción usa **solo las operaciones etiquetadas como concentración**:
+misma cuenta y distancia entre operaciones consecutivas de hasta cinco minutos,
+ordenadas por timestamp e ID. Es una definición post hoc fijada sin mirar las
+alertas. El encadenamiento puede durar más de cinco minutos y no equivale al
+conteo móvil `movimientos_5min`, que sigue incluyendo todas las operaciones
+previas de la cuenta según la regla causal original. Las posiciones dentro de
+la ráfaga cuentan sus operaciones etiquetadas, no todas las transacciones de
+la cuenta ni solo las que generaron alertas.
+
+Las concentraciones fuera de evaluación se conservan con puntajes y decisiones
+ausentes, sin imputar una operación normal. El informe señala las partes sin
+evaluación y los episodios que cruzan ventanas/modelos. La primera alerta se
+informa como posición, timestamp y segundos desde el inicio de la ráfaga completa;
+si no hay alertas, se informa N/D. En episodios incompletos es solamente la
+primera alerta **observada** durante evaluación.
+
+También se inspeccionan las características del entrenamiento ya preparado y
+los cortes de los árboles ya ajustados: mínimo, mediana, máximo, valores distintos,
+número de cortes y árboles que usaron cada variable. La lectura de la estructura
+se basa en los atributos descritos por
+[Scikit-learn](https://scikit-learn.org/stable/auto_examples/tree/plot_unveil_tree_structure.html).
+No se calculan importancias causales ni se explica un puntaje individual por la
+cantidad de veces que una variable aparece en los árboles.
+
+### Resultados reales del diagnóstico
+
+La ejecución de esta etapa, con Scikit-learn **1.9.1**, reprodujo las **900
+operaciones únicas**, 14 TP, 120 FP, 760 TN y 6 FN: precisión 10,45 %, recall
+70 % y F1 18,18 %. El umbral permaneció en 0.5 en las tres ventanas. A continuación
+se distinguen hechos medidos de hipótesis; las cifras están redondeadas solo
+para presentación y no intervienen en las decisiones.
+
+**Falsas alertas por cuenta y ventana.** Hubo FP en 26 de las 30 cuentas. Las
+tres cuentas con más FP reunieron 31 de los 120 casos (25,83 %). Los conteos y
+tasas muestran diferencias importantes de volumen:
+
+| Cuenta | FP | Normales reales (FP+TN) | Tasa FP | Total evaluado |
+| --- | ---: | ---: | ---: | ---: |
+| CTA030 | 12 | 67 | 17,91 % | 67 |
+| CTA007 | 10 | 19 | 52,63 % | 19 |
+| CTA020 | 9 | 25 | 36,00 % | 25 |
+| CTA011 | 7 | 12 | 58,33 % | 13 |
+| CTA016 | 7 | 13 | 53,85 % | 13 |
+| CTA029 | 7 | 61 | 11,48 % | 61 |
+
+CTA030 encabezó el conteo absoluto. CTA011 y CTA016 tuvieron tasas mayores,
+calculadas sobre denominadores pequeños; esto merece revisión, sin calificar
+las cuentas como problemáticas. Para CTA011, FP/total fue 53,85 %, diferente de
+su tasa FP del 58,33 %, porque una de sus 13 operaciones era una anomalía real.
+
+| Ventana | FP | Normales reales | Tasa FP | FP/total evaluado |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 59 | 291 | 20,27 % | 19,67 % |
+| 2 | 36 | 292 | 12,33 % | 12,00 % |
+| 3 | 25 | 297 | 8,42 % | 8,33 % |
+
+La primera ventana concentró el 49,17 % de las falsas alertas y tuvo la tasa FP
+más alta. Las ventanas cambian en operaciones, cuentas, referencias y bosque;
+esta comparación no aísla un efecto causal del tamaño de entrenamiento.
+
+**Características y puntajes de FP frente a TN.** Los siguientes son hechos
+descriptivos del agregado; el comando también muestra cada ventana por separado:
+
+| Variable | Mediana FP | Q1–Q3 FP | Mediana TN | Q1–Q3 TN |
+| --- | ---: | --- | ---: | --- |
+| `monto_relativo` | 0,978219 | 0,674775–1,595154 | 0,995920 | 0,816585–1,202918 |
+| `rareza_horaria` | 2,439444 | 2,116034–2,584509 | 1,998096 | 1,884541–2,112231 |
+| `movimientos_5min` | 1 | 1–1 | 1 | 1–1 |
+| `puntaje_anomalia` | 0,547098 | 0,516162–0,600941 | 0,408268 | 0,389162–0,441162 |
+
+La rareza horaria mediana fue mayor en FP también dentro de cada ventana:
+2,436116 frente a 2,098490; 2,484907 frente a 1,965031; y 2,384823 frente a
+1,911561. Los importes relativos FP presentaron mayor dispersión agregada,
+con valores tanto menores como mayores que la mediana de referencia: su mediana
+global cercana a 1 no resume esa dispersión. El patrón de importes varía entre
+ventanas, por lo que no se atribuyen todas las falsas alertas a importes altos.
+Todas las operaciones FP y TN tuvieron `movimientos_5min=1`; esa variable no
+distingue estos dos grupos en los datos evaluados.
+
+Los puntajes FP estuvieron entre 0,500679 y 0,678763; los TN, entre 0,363546 y
+0,499834. Esta separación responde a la regla de alerta: por sí sola no explica
+por qué se asignaron esos puntajes. La falsa alerta de mayor puntaje fue
+`TX000150` (CTA005, ventana 3): monto relativo 2,225725, rareza 2,523373 y
+puntaje 0,678763. FP significa discrepancia respecto de las etiquetas sintéticas,
+sin implicar una conclusión de fraude.
+
+**Las seis omisiones.** Todas fueron de concentración y tuvieron predicción 0:
+
+| ID | Cuenta | Fecha y hora | Ventana | Monto relativo | Rareza horaria | Movimientos/5 min | Puntaje |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| TX000643 | CTA021 | 17/02/2026 08:30:00 | 1 | 0,580196 | 2,313056 | 1 | 0,494996 |
+| TX000626 | CTA021 | 17/02/2026 08:31:00 | 1 | 1,207209 | 2,313056 | 2 | 0,431074 |
+| TX000638 | CTA021 | 17/02/2026 08:32:00 | 1 | 1,202440 | 2,313056 | 3 | 0,431736 |
+| TX000664 | CTA021 | 17/02/2026 08:33:00 | 1 | 0,885090 | 2,313056 | 4 | 0,420430 |
+| TX000621 | CTA021 | 17/02/2026 08:34:00 | 1 | 1,171568 | 2,313056 | 5 | 0,429521 |
+| TX001258 | CTA028 | 12/03/2026 09:30:00 | 2 | 0,724449 | 1,834319 | 1 | 0,413823 |
+
+En la primera ráfaga, la frecuencia subió de 1 a 5 sin producir alertas. Sus
+importes relativos se mantuvieron entre 0,580196 y 1,207209, y la rareza fue
+constante. El primer movimiento quedó a 0,005004 del umbral. En la segunda
+ráfaga se omitió el primer movimiento, cuyo conteo causal todavía era 1 y cuyo
+horario tenía rareza 1,834319. Son descripciones de las señales disponibles,
+sin atribuir una causa específica a cada decisión.
+
+**Comparación de ráfagas.** Ambas tuvieron cinco operaciones separadas por un
+minuto, duraron cuatro minutos, quedaron completamente en evaluación y no
+cruzaron modelos:
+
+| Ráfaga | Cuenta / ventana | Período | Detectadas | Primera alerta | Demora |
+| --- | --- | --- | ---: | --- | --- |
+| 1 | CTA021 / 1 | 17/02/2026 08:30–08:34 | 0/5 | N/D | N/D |
+| 2 | CTA028 / 2 | 12/03/2026 09:30–09:34 | 4/5 | 2.ª operación, TX001266, 09:31:00 | 60 segundos |
+
+En CTA028, los puntajes cronológicos fueron 0,413823; 0,516967; 0,655514;
+0,619951; 0,662827. Sus montos relativos estuvieron entre 0,724449 y 1,774522 y
+su rareza horaria fue 1,834319. El comando imprime los diez movimientos de ambas
+ráfagas con IDs, características, puntajes y resultado correcto/incorrecto.
+
+La inspección del entrenamiento y de la estructura ya ajustada aportó este
+hecho adicional para `movimientos_5min`:
+
+| Ventana | Entrenamiento | Valores observados | Cortes con frecuencia | Árboles que la usaron |
+| --- | ---: | --- | ---: | ---: |
+| 1 | 600 | Solo 1 | 0 | 0/200 |
+| 2 | 900 | 1, 2, 3, 4, 5 | 176 | 130/200 |
+| 3 | 1200 | 1, 2, 3, 4, 5 | 261 | 169/200 |
+
+En el primer bosque la frecuencia no interviene en ningún corte: no existía
+variación de esa característica en su entrenamiento. En el segundo ya había
+variación histórica, incluida la primera ráfaga, y la variable apareció en
+130 árboles. Esto permite identificar una limitación estructural del primer
+modelo; no equivale a una explicación causal completa de cada puntaje ni a una
+medida de importancia relativa de las variables.
+
+### Hipótesis y trabajo posterior
+
+- La ausencia de variación histórica de frecuencia es compatible con la
+  dificultad del primer bosque para responder a la concentración. Conviene
+  estudiar cobertura y diversidad del entrenamiento en nuevos episodios.
+- La asociación de falsas alertas con mayor rareza horaria sugiere revisar la
+  estabilidad de las referencias por cuenta y la cantidad de historial
+  disponible. Este análisis no prueba que la hora sea su causa individual.
+- Conviene medir detección y demora por episodio, además de por transacción:
+  una primera operación con conteo causal 1 aún no revela una ráfaga futura.
+- Cualquier cambio de características o eventual calibración del umbral debe
+  usar validación separada, costos explícitos de revisión/omisión y una prueba
+  final nueva. No corresponde optimizar y volver a reportar estas mismas ventanas
+  como evidencia independiente.
+
+Solo hay dos episodios sintéticos de concentración, con cuentas, importes,
+referencias y modelos diferentes. Sus operaciones están relacionadas; los
+entrenamientos crecientes también se solapan. Estas limitaciones impiden aislar
+la contribución de cada diferencia observada y generalizar los resultados al
+sistema bancario real. La reconstrucción con etiquetas tampoco constituye un
+detector de ráfagas listo para producción.
+
+La verificación aprobó **102 pruebas**: las 90 anteriores y 12 nuevas. Estas
+últimas cubren clasificación e IDs, tasas y denominadores, distribuciones,
+ráfagas y empates, primera alerta, casos sin evaluación, independencia respecto
+de las predicciones, lectura posterior de etiquetas, ausencia de recálculos y
+errores de conexión seguros. Se ejecutó la suite completa con `-W error` y luego
+el análisis real, secuencialmente. Se verificaron por SHA-256 los módulos de
+las etapas anteriores, CSV, conexión, interfaz y dependencias: permanecen intactos.
 
 ## Generación y validación
 
