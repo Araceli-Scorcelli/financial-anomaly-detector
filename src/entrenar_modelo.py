@@ -89,6 +89,27 @@ def entrenar_y_predecir(transacciones: pd.DataFrame) -> ResultadoEntrenamiento:
     historial de entrenamiento. Las medianas/distribuciones quedan fijas al corte.
     """
     entrenamiento, evaluacion = separar_cronologicamente(transacciones)
+    return entrenar_particion(entrenamiento, evaluacion)
+
+
+def entrenar_particion(
+    entrenamiento: pd.DataFrame, evaluacion: pd.DataFrame,
+) -> ResultadoEntrenamiento:
+    """Mismo detector de 4B sobre una partición temporal explícita, sin etiquetas.
+
+    Compartido con walk-forward: las referencias usan solo entrenamiento y los
+    conteos de evaluación incluyen su historial. No cambia parámetros ni umbral.
+    """
+    entrenamiento = validar_y_convertir(entrenamiento).sort_values(
+        ["fecha_hora", "transaccion_id"], kind="stable",
+    )
+    evaluacion = validar_y_convertir(evaluacion).sort_values(
+        ["fecha_hora", "transaccion_id"], kind="stable",
+    )
+    if (entrenamiento.empty or evaluacion.empty
+            or entrenamiento["fecha_hora"].max() >= evaluacion["fecha_hora"].min()
+            or set(entrenamiento["transaccion_id"]) & set(evaluacion["transaccion_id"])):
+        raise ValueError("Se requieren particiones no vacías, sin IDs compartidos y con entrenamiento anterior a evaluación.")
     referencias = ajustar_referencias(entrenamiento)
     preparados_train = transformar_datos(entrenamiento, referencias)
     preparados_eval = transformar_datos(evaluacion, referencias, historial=entrenamiento)

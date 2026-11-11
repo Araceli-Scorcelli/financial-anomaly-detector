@@ -45,6 +45,11 @@ y revisar las métricas históricas. Reutiliza las etapas anteriores y mantiene 
 lectura de PostgreSQL sin modificar datos. Es una demostración académica con datos
 sintéticos; una alerta no confirma fraude. No se conecta con bancos reales.
 
+La etapa 6 agrega una evaluación temporal complementaria con tres ventanas de
+entrenamiento creciente y bloques posteriores de evaluación sin solapamientos.
+Conserva el detector, sus parámetros y la evaluación 80/20 de las etapas anteriores.
+Se ejecuta desde consola y no cambia la aplicación Streamlit.
+
 ## Estructura
 
 ```text
@@ -60,7 +65,8 @@ financial-anomaly-detector/
 │   ├── database.py                # Configuración y conexión de solo lectura.
 │   ├── verificar_conexion.py      # Verificación manual y lectura con Pandas.
 │   ├── preparar_datos.py          # Validación, referencias y características.
-│   └── entrenar_modelo.py         # Isolation Forest y evaluación cronológica.
+│   ├── entrenar_modelo.py         # Isolation Forest y evaluación cronológica.
+│   └── evaluacion_temporal.py     # Walk-forward, métricas y cobertura temporal.
 ├── sql/
 │   ├── crear_tablas.sql           # Estructura e indicaciones de importación.
 │   └── consultas_exploratorias.sql # Consultas de lectura en pgAdmin.
@@ -69,7 +75,8 @@ financial-anomaly-detector/
 │   ├── test_database.py           # Pruebas de conexión sin una base real.
 │   ├── test_preparar_datos.py     # Características con datos ficticios, sin DB.
 │   ├── test_entrenar_modelo.py    # Separación, modelo y métricas sin DB.
-│   └── test_app.py               # Interfaz con AppTest y datos ficticios.
+│   ├── test_app.py               # Interfaz con AppTest y datos ficticios.
+│   └── test_evaluacion_temporal.py # Ventanas, causalidad y métricas sin DB.
 ├── app.py              # Dashboard local de Streamlit.
 ├── .env.example        # Plantilla versionada, sin credenciales reales.
 ├── README.md           # Descripción, instalación y alcance.
@@ -483,6 +490,158 @@ La verificación local tras la mejora visual aprobó **77 pruebas**: las 67 ante
 métricas globales con una sola lectura y un solo entrenamiento. El servidor
 local inició correctamente y respondió con HTTP 200; se detuvo al terminar la
 prueba. Estas comprobaciones no requieren abrir otro navegador durante la suite.
+
+## Etapa 6: evaluación temporal progresiva
+
+Con PostgreSQL activo y el `.env` local ya configurado, ejecutar desde la raíz:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -W error -m src.evaluacion_temporal
+```
+
+El comando lee PostgreSQL una sola vez mediante la conexión de solo lectura y
+libera sus recursos antes de entrenar. Los resultados quedan en memoria y se
+imprimen en consola; no guarda modelos ni cambia los CSV o la interfaz.
+
+Se ordenan los movimientos por `fecha_hora` y `transaccion_id`. Los límites se
+fijan en el 40 %, 60 % y 80 % de todos los registros, sin consultar etiquetas.
+Si un límite comparte timestamp, se desplaza al comienzo de ese grupo, igual
+que el corte de 4B. Con 1500 movimientos sin empates en los cortes, las ventanas
+son 600/300, 900/300 y 1200/300. Si los empates impiden formar tres evaluaciones
+no vacías, se informa un error en vez de separar el grupo o repetir filas.
+
+Cada entrenamiento es el prefijo completo anterior a su evaluación. Las
+evaluaciones son bloques adyacentes y disjuntos; una operación evaluada puede
+entrar en el entrenamiento de una ventana posterior como parte del pasado
+disponible, sin utilizar su etiqueta. Los primeros 600 movimientos son solo
+entrenamiento inicial: no reciben predicciones de evaluación en este esquema.
+Son ventanas por cantidad de registros, con duraciones de calendario diferentes.
+
+`entrenar_particion` comparte el bloque de preparación, entrenamiento y
+predicción de 4B con la nueva evaluación. En cada ventana se reajustan las
+referencias solo con entrenamiento y se conservan fijas durante la evaluación.
+`movimientos_5min` reutiliza el cálculo causal de 4A: incluye el historial de
+entrenamiento, las operaciones previas del bloque y la operación actual, sin
+contar movimientos futuros. A igual timestamp se conserva el orden por ID.
+
+Se mantienen las tres características y todos los parámetros de 4B: 200 árboles,
+`max_samples="auto"`, `contamination="auto"`, `max_features=1.0`,
+`bootstrap=False`, `random_state=42` y `n_jobs=1`. El puntaje sigue siendo
+`-score_samples` y la alerta exige superar estrictamente 0.5.
+
+Primero se generan las predicciones de las tres ventanas. Además, se ejecuta
+el punto de entrada 80/20 de 4B para comprobar que su entrenamiento, características,
+puntajes y predicciones coincidan exactamente con la última ventana. Esa cuarta
+ejecución es solo una comprobación y no agrega filas al resumen. Recién después
+se lee el CSV de etiquetas, se valida su cobertura total y se vincula por ID.
+
+Cada informe incluye períodos, cantidades, TP/FP/TN/FN, matriz de confusión,
+precisión, recall, F1 y resultados por tipo. El agregado concatena las predicciones
+de evaluación y exige IDs únicos; calcula sus métricas sobre esas filas, sin
+promediar porcentajes entre ventanas. También identifica las anomalías que
+quedaron fuera de evaluación en el entrenamiento inicial.
+
+**Average Precision (AP)** resume el ordenamiento por los puntajes continuos;
+se calcula con `average_precision_score`, sin usar las decisiones binarias ni
+optimizar el umbral. Su definición está en la
+[documentación de Scikit-learn](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.average_precision_score.html).
+Por criterio explícito, se informa **N/D** si falta cualquiera de las dos clases
+reales, porque no se puede medir su separación. El recall global o por tipo es
+**N/D** cuando no hay anomalías reales del grupo. Precisión y F1 conservan la
+convención `zero_division=0` de 4B; deben interpretarse junto con los conteos.
+
+### Resultados reales de esta etapa
+
+Ejecución verificada el **10 de noviembre de 2026**, con Scikit-learn **1.9.1**:
+1500 movimientos de 30 cuentas. No hubo ajustes de tamaño por empates en estos
+cortes. Todos los entrenamientos comienzan el **01/01/2026 a las 08:01:05**.
+
+| Ventana | Entrenamiento | Hasta (entrenamiento) | Evaluación | Desde (evaluación) | Hasta (evaluación) |
+| --- | ---: | --- | ---: | --- | --- |
+| 1 | 600 | 04/02/2026 14:42:24 | 300 | 04/02/2026 14:54:42 | 20/02/2026 15:16:20 |
+| 2 | 900 | 20/02/2026 15:16:20 | 300 | 20/02/2026 15:18:47 | 13/03/2026 09:25:21 |
+| 3 | 1200 | 13/03/2026 09:25:21 | 300 | 13/03/2026 09:30:51 | 31/03/2026 19:13:50 |
+
+| Evaluación | Movimientos | Anomalías reales | Alertas | TP | FP | TN | FN |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ventana 1 | 300 | 9 | 63 | 4 | 59 | 232 | 5 |
+| Ventana 2 | 300 | 8 | 43 | 7 | 36 | 256 | 1 |
+| Ventana 3 | 300 | 3 | 28 | 3 | 25 | 272 | 0 |
+| Agregado | 900 | 20 | 134 | 14 | 120 | 760 | 6 |
+
+| Evaluación | Precisión | Recall | F1 | AP |
+| --- | ---: | ---: | ---: | ---: |
+| Ventana 1 | 6,35 % | 44,44 % | 11,11 % | 0,308107 |
+| Ventana 2 | 16,28 % | 87,50 % | 27,45 % | 0,602596 |
+| Ventana 3 | 10,71 % | 100,00 % | 19,35 % | 1,000000 |
+| Agregado | 10,45 % | 70,00 % | 18,18 % | 0,517434 |
+
+Matrices `[[TN, FP], [FN, TP]]`: ventana 1 `[[232, 59], [5, 4]]`,
+ventana 2 `[[256, 36], [1, 7]]`, ventana 3 `[[272, 25], [0, 3]]` y agregado
+`[[760, 120], [6, 14]]`. La ventana 3 reproduce **exactamente** las características,
+los puntajes y las decisiones del 80/20, además de sus métricas originales.
+
+Resultados por tipo, expresados como **detectadas / reales**:
+
+| Evaluación | Importe inusual | Horario atípico | Concentración |
+| --- | ---: | ---: | ---: |
+| Ventana 1 | 1/1 (100 %) | 3/3 (100 %) | 0/5 (0 %) |
+| Ventana 2 | 2/2 (100 %) | 1/1 (100 %) | 4/5 (80 %) |
+| Ventana 3 | 2/2 (100 %) | 1/1 (100 %) | 0/0 (N/D) |
+| Agregado | 5/5 (100 %) | 5/5 (100 %) | 4/10 (40 %) |
+
+Quedaron **10 anomalías sin evaluar**, todas dentro del entrenamiento inicial:
+cinco de importe (`TX000039`, `TX000108`, `TX000370`, `TX000399`, `TX000727`) y
+cinco de horario (`TX000127`, `TX000287`, `TX000341`, `TX000486`, `TX000587`).
+No se movieron los cortes para incluirlas. Las diez operaciones de concentración
+sí quedaron en evaluación: seis fueron falsos negativos, no casos sin evaluar.
+
+### Interpretación y limitaciones
+
+El recall del 100 % del último bloque no describe todo el período: el agregado
+es 70 %, con 120 falsas alertas entre 134 alertas. El comportamiento más débil
+observado corresponde a las concentraciones. Estas diferencias entre ventanas
+no prueban que aumentar el entrenamiento cause una mejora: cambian las cuentas,
+las operaciones y los casos anómalos de cada evaluación.
+
+AP mide el ranking a distintos niveles de corte, mientras las alertas usan el
+umbral fijo de 0.5. Por eso una AP de 1 en la última ventana puede coexistir con
+25 falsos positivos: sus tres anomalías encabezan el ranking, pero otras
+operaciones también superan el umbral. No se utilizó ese resultado para ajustarlo.
+La AP agregada se ofrece como descripción del ranking combinado, con la
+limitación de mezclar puntajes de tres modelos sin calibración entre ventanas;
+conviene priorizar las AP de cada ventana para interpretar el ranking.
+
+Solo se evaluaron 20 anomalías sintéticas; las diez de concentración pertenecen
+a **dos ráfagas**, no a diez episodios independientes. Además, con un conteo
+causal la primera operación de una ráfaga aún no revela la concentración futura.
+No se puede generalizar este rendimiento a transacciones reales, interpretar
+una alerta como fraude ni atribuirle una causa específica. Las referencias y
+los modelos pueden estar afectados por anomalías no identificadas del pasado:
+no se quitaron usando las etiquetas. El prefijo inicial no tiene una evaluación
+fuera de muestra en este diseño, y los entrenamientos de ventanas sucesivas se
+solapan, de modo que las métricas entre ventanas tampoco son independientes.
+
+Como trabajo posterior conviene reunir más períodos y episodios independientes,
+analizar falsas alertas por cuenta y horario, y medir también la detección y
+demora por ráfaga. Una eventual revisión de características o del umbral debería
+usar períodos de validación separados y una evaluación final nueva, con un
+criterio explícito de costo de falsas alertas y omisiones. Esta etapa no cambia
+características, parámetros ni umbral para mejorar las métricas observadas.
+
+La suite completa aprobó **90 pruebas** (77 anteriores y 13 nuevas) sin una base
+real. Las nuevas cubren cortes y empates, IDs, causalidad, referencias sin futuro,
+equivalencia con 80/20, lectura de etiquetas posterior a todas las predicciones,
+AP con un ejemplo conocido, clases ausentes, agregado sin duplicados y errores
+de conexión seguros. Se ejecutaron con:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -W error -m unittest discover -s tests -v
+```
+
+Después se ejecutó el comando real de esta etapa, confirmado en modo de solo
+lectura. Los resultados anteriores son el registro de esa ejecución; el comando
+los vuelve a calcular con los movimientos disponibles.
 
 ## Generación y validación
 
