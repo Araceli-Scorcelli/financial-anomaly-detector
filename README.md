@@ -55,6 +55,11 @@ normales correctamente clasificadas, distingue conteos de tasas por cuenta y
 ventana, y reconstruye las ráfagas etiquetadas para revisar omisiones y demoras.
 Es un diagnóstico posterior; no ajusta el detector a partir de los resultados.
 
+La etapa 6C compara, en un experimento separado, Isolation Forest con la unión
+de sus alertas y una regla fija de concentración: `movimientos_5min >= 3`.
+Incluye una comparación histórica exploratoria y escenarios nuevos de abril,
+sin incorporar el enfoque híbrido al modelo principal ni a Streamlit.
+
 ## Estructura
 
 ```text
@@ -72,7 +77,9 @@ financial-anomaly-detector/
 │   ├── preparar_datos.py          # Validación, referencias y características.
 │   ├── entrenar_modelo.py         # Isolation Forest y evaluación cronológica.
 │   ├── evaluacion_temporal.py     # Walk-forward, métricas y cobertura temporal.
-│   └── analisis_errores.py        # Diagnóstico post hoc de errores y ráfagas.
+│   ├── analisis_errores.py        # Diagnóstico post hoc de errores y ráfagas.
+│   ├── generar_escenarios_rafagas.py # Escenarios nuevos solo en memoria.
+│   └── experimento_rafagas.py     # Comparación experimental IF y regla.
 ├── sql/
 │   ├── crear_tablas.sql           # Estructura e indicaciones de importación.
 │   └── consultas_exploratorias.sql # Consultas de lectura en pgAdmin.
@@ -83,7 +90,8 @@ financial-anomaly-detector/
 │   ├── test_entrenar_modelo.py    # Separación, modelo y métricas sin DB.
 │   ├── test_app.py               # Interfaz con AppTest y datos ficticios.
 │   ├── test_evaluacion_temporal.py # Ventanas, causalidad y métricas sin DB.
-│   └── test_analisis_errores.py   # Tasas, errores, ráfagas y diagnóstico sin DB.
+│   ├── test_analisis_errores.py   # Tasas, errores, ráfagas y diagnóstico sin DB.
+│   └── test_experimento_rafagas.py # Regla, escenarios y modelo fijo sin DB.
 ├── app.py              # Dashboard local de Streamlit.
 ├── .env.example        # Plantilla versionada, sin credenciales reales.
 ├── README.md           # Descripción, instalación y alcance.
@@ -851,6 +859,213 @@ de las predicciones, lectura posterior de etiquetas, ausencia de recálculos y
 errores de conexión seguros. Se ejecutó la suite completa con `-W error` y luego
 el análisis real, secuencialmente. Se verificaron por SHA-256 los módulos de
 las etapas anteriores, CSV, conexión, interfaz y dependencias: permanecen intactos.
+
+## Etapa 6C: experimento controlado de concentración
+
+Este comando ejecuta un experimento separado. No reemplaza el detector ni
+incorpora reglas a Streamlit. Desde PowerShell, con PostgreSQL activo y el
+`.env` local configurado:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -W error -m src.experimento_rafagas
+```
+
+Se comparan las predicciones originales de **Isolation Forest** con una
+predicción **híbrida**, definida como `IF OR movimientos_5min >= 3`. La regla
+queda fijada por el protocolo; no se buscan otros valores. Se conservan los
+200 árboles, `contamination="auto"`, `random_state=42`, las tres características
+y el umbral original. Los puntajes siguen siendo los de IF: la regla añade
+una decisión binaria, sin inventar un puntaje híbrido ni una probabilidad.
+Una alerta adicional puede ser un acierto o una falsa alerta.
+
+El comando lee PostgreSQL en modo de solo lectura y cierra la conexión antes
+de entrenar. Como las etapas anteriores no guardan modelos, reproduce una sola
+vez las tres ventanas con `predecir_ventanas` y reutiliza sus predicciones.
+Cada una de las 900 operaciones históricas se cuenta una sola vez. Esta parte
+es **retrospectiva y exploratoria**: la regla se propuso después de conocer sus
+errores, por lo que no constituye una validación independiente.
+
+### Protocolo nuevo fijado antes de medir
+
+`src/generar_escenarios_rafagas.py` crea datos solo en memoria, con semilla
+**2026**, sin escribir ni modificar los CSV existentes. El protocolo genera
+**180 operaciones de abril de 2026**, posteriores a todo el histórico:
+
+- 120 operaciones normales aisladas: una por cuenta los días 1, 2, 29 y 30.
+- Ocho episodios etiquetados como concentración anómala, con 30 operaciones.
+- Ocho episodios de actividad concentrada legítima, con otras 30 operaciones.
+
+Los 16 episodios usan cuentas distintas, un generador aleatorio independiente
+por episodio y fechas laborables entre el 6 y el 27 de abril. Cada patrón se
+repite en una cuenta personal y una comercial para **cada** clase de episodio.
+Las etiquetas y la pertenencia a episodios se definen al generar los casos,
+separadas de las ocho columnas originales y sin consultar predicciones:
+
+| Patrón | Segundos desde el inicio | Operaciones/episodio | Máximo causal en 5 min |
+| --- | --- | ---: | ---: |
+| Densa | 0, 60, 120, 180, 240 | 5 | 5 |
+| Borde de ventana | 0, 120, 300 | 3 | 3 |
+| Corta | 0, 120 | 2 | 2 |
+| Espaciada | 0, 180, 360, 540, 720 | 5 | 2 |
+
+La ventana móvil incluye el límite de cinco minutos y la operación actual.
+Los casos cortos y espaciados no alcanzan el umbral de la regla. En las
+secuencias densas la regla empieza en la tercera operación, a los 120 segundos;
+en las de borde, en la tercera, a los 300 segundos. Esto no implica que IF
+espere esos tiempos: puede alertar antes por su propio puntaje.
+
+Los montos siguen una distribución lognormal alrededor de la mediana de
+referencia de la cuenta, con dispersión 0,2, redondeo a centavos y mínimo
+positivo. Las horas proceden de la hora modal de entrenamiento de cada cuenta.
+Todos son egresos por transferencia/homebanking. Los dos tipos de episodio
+usan los mismos patrones y distribuciones; su diferencia de etiqueta es una
+condición semántica del escenario, no una propiedad que estas tres variables
+permitan necesariamente distinguir. No se define la verdad como `conteo >= 3`.
+
+Para abril se conserva **el último modelo cronológico**, entrenado con 1200
+operaciones, y sus referencias ya ajustadas. Se elige por orden temporal,
+sin comparar rendimientos. Las 1500 operaciones históricas están disponibles
+como historial sin etiquetas para los conteos, pero las últimas 300 no se usan
+para reajustar referencias ni el bosque. `transformar_datos` conserva el
+cálculo causal, incluyendo solo movimientos anteriores disponibles y el actual,
+con su criterio original para empates. No hay ningún `fit` sobre abril.
+
+Se generan todas las predicciones históricas y nuevas antes de leer el archivo
+de etiquetas histórico; después se vinculan las etiquetas por `transaccion_id`.
+No se modifican escenarios, semilla, parámetros ni umbrales según los resultados.
+
+### Lectura de los resultados
+
+La consola presenta por separado la comparación histórica, su desglose por
+ventana y la prueba nueva; incluye matrices de confusión, precisión, recall,
+F1, tasa FP y operaciones de concentración detectadas. Lista cada alerta
+añadida, indicando si fue TP o FP, y distingue falsas alertas sobre operaciones
+aisladas de las producidas sobre actividad concentrada legítima.
+
+**Episodio detectado** significa al menos una alerta; **cobertura completa**
+significa que todas sus operaciones generaron alertas. No son equivalentes.
+Se muestran posición y timestamp de la primera alerta, y segundos desde el
+inicio. Sin alertas, la demora es N/D. Las medianas de demora incluyen solo
+episodios con alerta y muestran ese denominador; no imputan cero a omisiones.
+En actividad legítima, un episodio con alerta representa una falsa alarma.
+Los dos episodios históricos del dataset actual están completamente evaluados;
+si se cambiara el dataset y uno cruzara el corte inicial de entrenamiento,
+habría que revisar su cobertura antes de interpretar métricas de episodio.
+
+### Resultados de la ejecución real
+
+Se ejecutó el comando con PostgreSQL en solo lectura y Scikit-learn **1.9.1**.
+El modelo congelado de abril usó las 1200 operaciones hasta el **13/03/2026
+09:25:21**; el historial disponible llegó hasta el **31/03/2026 19:13:50**.
+Los resultados siguientes no motivaron ningún cambio del protocolo.
+
+**Histórico exploratorio: 900 operaciones, 20 anomalías reales.**
+
+| Enfoque | Alertas | TP | FP | TN | FN | Precisión | Recall | F1 | Concentración detectada |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Isolation Forest | 134 | 14 | 120 | 760 | 6 | 10,45 % | 70,00 % | 18,18 % | 4/10 |
+| Híbrido | 137 | 17 | 120 | 760 | 3 | 12,41 % | 85,00 % | 21,66 % | 7/10 |
+
+La regla añadió **tres TP y cero FP**: `TX000638`, `TX000664` y `TX000621`,
+de CTA021, con conteos 3, 4 y 5. La tasa FP quedó en 13,64 % en ambos casos.
+Solo cambió la primera ventana: TP 4→7, FN 5→2 y alertas 63→66, con 59 FP.
+La segunda conservó 7 TP, 36 FP y una omisión; la tercera mantuvo las 28
+alertas originales, tres TP, 25 FP y ninguna omisión.
+
+| Ráfaga histórica | IF: operaciones detectadas | Híbrido: operaciones detectadas | Primera alerta IF | Primera alerta híbrida |
+| --- | ---: | ---: | --- | --- |
+| H01, CTA021, 17/02 | 0/5 | 3/5 | N/D | 3.ª operación, 08:32:00, a los 120 s |
+| H02, CTA028, 12/03 | 4/5 | 4/5 | 2.ª operación, 09:31:00, a los 60 s | Igual: 2.ª operación, a los 60 s |
+
+La detección de episodios pasó de **1/2 a 2/2**, pero la cobertura de todas
+sus operaciones siguió en **0/2**. La mediana de demora fue 60 s sobre un
+episodio con IF y 90 s sobre dos con el híbrido: no describe un retraso en el
+mismo caso, sino la incorporación de una detección antes ausente. El beneficio
+se observa en el bosque cuyo entrenamiento tenía frecuencia constante; sigue
+siendo evidencia exploratoria sobre casos ya conocidos.
+
+**Escenarios nuevos: 180 operaciones, 30 anomalías reales.**
+
+| Enfoque | Alertas | TP | FP | TN | FN | Precisión | Recall | F1 | Concentración detectada |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Isolation Forest | 44 | 22 | 22 | 128 | 8 | 50,00 % | 73,33 % | 59,46 % | 22/30 |
+| Híbrido | 44 | 22 | 22 | 128 | 8 | 50,00 % | 73,33 % | 59,46 % | 22/30 |
+
+La regla añadió **cero TP y cero FP**: todas las operaciones que cumplían
+su condición ya estaban alertadas por el bosque congelado. Por tanto, tampoco
+adelantó ninguna primera alerta. La tasa FP fue 14,67 % para ambos enfoques.
+
+El detalle de los 16 episodios aparece en consola. Ambos enfoques tuvieron
+este mismo comportamiento por patrón; cada fila agrupa dos episodios anómalos
+y dos legítimos, con una cuenta personal y una comercial por clase:
+
+| Patrón | TP / operaciones anómalas | FP / operaciones legítimas | Episodios anómalos con alerta | Episodios legítimos con falsa alarma | Primera alerta en cada episodio |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Densa | 8/10 | 8/10 | 2/2 | 2/2 | 2.ª operación, 60 s |
+| Borde | 4/6 | 4/6 | 2/2 | 2/2 | 2.ª operación, 120 s |
+| Corta | 2/4 | 2/4 | 2/2 | 2/2 | 2.ª operación, 120 s |
+| Espaciada | 8/10 | 8/10 | 2/2 | 2/2 | 2.ª operación, 180 s |
+
+Se detectaron **8/8 episodios anómalos**, con **0/8** de cobertura completa.
+Las ocho omisiones fueron sus primeras operaciones, con conteo causal 1.
+Los ocho episodios legítimos también recibieron falsas alarmas; ninguna
+operación normal aislada fue alertada (**0/120**). Los **22 FP** se concentran
+en las 30 operaciones legítimas agrupadas: tasa FP 73,33 % en ese subgrupo.
+No son falsas alertas añadidas por la regla; ya estaban presentes en IF.
+La mediana de primera alerta fue 120 s, sobre ocho episodios, tanto para las
+concentraciones anómalas como para las legítimas y en ambos enfoques.
+
+### Interpretación y decisión experimental
+
+La comparación histórica muestra que una regla explícita puede cubrir una
+característica sin variación en el entrenamiento del primer bosque. En la
+prueba nueva, el último bosque ya respondió a esas concentraciones y la regla
+fue redundante. **Estos resultados no justifican incorporar automáticamente
+el híbrido al detector o a la aplicación.** Permanece como experimento separado.
+
+La ausencia de FP adicionales en esta ejecución no demuestra que la regla sea
+inocua en otros datos: también se activa sobre actividad legítima concentrada.
+El control legítimo muestra un problema común a ambos enfoques: detectar un
+patrón de actividad no basta para decidir si merece revisión. Las etiquetas
+semánticas de estos casos usan las mismas distribuciones observables, así que
+no se espera inferir su significado solo con estas tres características.
+
+La prueba de abril es nueva respecto del histórico y se fijó antes de medir,
+pero sigue siendo **sintética y condicionada a perfiles del entrenamiento**.
+Hay pocos episodios, montos cercanos a sus medianas, horarios modales y un solo
+tipo/dirección/canal. Sus operaciones están relacionadas; no son 180 pruebas
+independientes de generalización. Tampoco se probó en abril el bosque inicial
+con frecuencia constante: se eligió de antemano el último modelo cronológico.
+La proporción de anomalías cambia de 20/900 a 30/180, por lo que no corresponde
+interpretar la diferencia de precisión entre poblaciones como una mejora.
+
+Una regla parecida al mecanismo que construye las anomalías sintéticas puede
+obtener buenos resultados sin generalizar a movimientos reales. Antes de
+integrarla convendría investigar, con un protocolo y datos nuevos, su aporte
+cuando el entrenamiento carece de variación en frecuencia; incluir más lotes
+legítimos y perfiles de cuenta, y acordar el costo de alertas y omisiones.
+También conviene medir carga de revisión por episodio. Esas son hipótesis para
+trabajo posterior; no se ajustaron escenarios, características ni umbrales aquí.
+
+### Verificación del experimento
+
+Pasaron **116 pruebas**: las 102 existentes y 14 nuevas, con `-W error`.
+Se ejecutaron secuencialmente, antes de la evaluación real. Las pruebas nuevas
+comprueban la unión inclusiva desde tres, conservación de predicciones y
+puntajes originales, correspondencia por ID, conteos y métricas conocidas,
+recall no evaluable sin anomalías, episodios completos y demoras, reproducibilidad
+y balance de escenarios, límites de cinco minutos, causalidad por prefijos,
+independencia del futuro, ausencia de reajuste y lectura posterior de etiquetas.
+También verifican errores de conexión seguros, sin una base real.
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -W error -m unittest discover -s tests -v
+```
+
+Los módulos anteriores, la conexión, CSV, dependencias y Streamlit conservaron
+sus hashes SHA-256. No se incorporaron dependencias, no se modificó PostgreSQL
+y no se realizaron commits. Los datos nuevos y los resultados quedan en memoria
+y consola; ejecutar el comando no escribe archivos del dataset.
 
 ## Generación y validación
 
