@@ -591,22 +591,77 @@ verificación; no se agregó a la configuración del proyecto.
 
 ### Preparación para Streamlit Community Cloud
 
-Esta etapa no publica la aplicación. Un futuro despliegue usará `app.py` como
-punto de entrada, las dependencias existentes de `requirements.txt` y los dos CSV
-versionados. No necesita credenciales de PostgreSQL. Para seleccionar el demo,
-configurar `DATA_SOURCE = "csv"` como clave raíz en **Advanced settings → Secrets**;
-Streamlit expone las claves raíz también como variables de entorno. No subir
-`.env` ni contraseñas al repositorio. Ver la [documentación de secretos de
-Streamlit](https://docs.streamlit.io/develop/concepts/connections/secrets-management).
+La revisión de despliegue quitó únicamente `[server] address = "127.0.0.1"` de
+`.streamlit/config.toml`, para que la plataforma gestione la dirección y el puerto.
+La paleta, tipografías, espacios, bordes y estilos del tema se conservaron íntegros.
+No se fijó un puerto ni se habilitó la API de pruebas. Tampoco se añadieron cambios
+de CORS/XSRF. `browser.gatherUsageStats = false` se mantiene en el archivo local;
+Community Cloud puede sobrescribir esta y otras opciones según su
+[configuración de plataforma](https://docs.streamlit.io/deploy/streamlit-community-cloud/status).
 
-Se revisó `.streamlit/config.toml` y se conserva sin cambios, incluido el tema
-aprobado y `browser.gatherUsageStats = false`. Su `server.address = "127.0.0.1"`
-limita el servidor al equipo local: antes de desplegar, revisar el enlace de red
-de la plataforma y quitar o sobrescribir esa dirección (por ejemplo, con
-`STREAMLIT_SERVER_ADDRESS=0.0.0.0`) y usar inicio sin navegador (`server.headless`).
-Las [variables de entorno y opciones de arranque de Streamlit](https://docs.streamlit.io/develop/concepts/configuration/options)
-permiten sobrescribir la configuración sin tocar el tema. No hace falta desactivar
-las protecciones CORS/XSRF ni habilitar interfaces de prueba en un despliegue.
+`requirements.txt` fija las siete dependencias directas a las versiones instaladas
+y probadas, sin agregar paquetes ni actualizar el entorno: Streamlit 1.67.0,
+Pandas 3.1.1, NumPy 2.5.4, Scikit-learn 1.9.1, SQLAlchemy 2.1.8,
+psycopg[binary] 3.3.8 y python-dotenv 1.2.4. Así se conservan las APIs del diseño
+aprobado y las versiones principales del entorno científico. SQLAlchemy, Psycopg y
+dotenv se mantienen porque los módulos compartidos los importan incluso en modo
+CSV; no se crean conexiones al seleccionarlo. Las dependencias transitivas no
+constituyen un bloqueo completo del entorno y pueden variar al resolverlo.
+
+Seleccionar **Python 3.14** en Cloud para coincidir con la versión menor probada
+localmente (3.14.10). Todas estas dependencias admiten esa versión; se verificaron
+en PyPI distribuciones Linux/CPython 3.14 para las dependencias binarias principales.
+Community Cloud admite versiones publicadas de Python con soporte de seguridad y
+permite elegirlas en [Advanced settings](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy).
+No depender de la versión predeterminada de la plataforma ni usar `runtime.txt`
+como sustituto de esa selección. El parche concreto de Python lo gestiona Cloud.
+
+Pasos manuales cuando se decida publicar:
+
+1. Guardar y sincronizar manualmente estos cambios con GitHub. Esta revisión no
+   realiza commits, push ni despliegues; Cloud usa el contenido remoto, no el de VS Code.
+2. En **Create app**, elegir el repositorio, la rama `feature/redesign-streamlit`
+   y **Main file path: `app.py`**. En **Advanced settings**, seleccionar Python 3.14.
+3. En **Secrets**, pegar únicamente esta configuración TOML, en la raíz, sin una
+   sección `[database]` o `[DATA_SOURCE]`:
+
+   ```toml
+   DATA_SOURCE = "csv"
+   ```
+
+4. No configurar `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` ni `DB_PASSWORD` para
+   el demo. El valor raíz se expone como variable de entorno antes de ejecutar la
+   aplicación, según la [documentación de Secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management).
+   Sin esa selección explícita, el proyecto sigue usando PostgreSQL por defecto;
+   no hay respaldo automático hacia CSV.
+5. Después del despliegue manual, revisar los logs de instalación y comprobar
+   300 movimientos evaluados, 28 alertas y las métricas documentadas arriba, además
+   de filtros y actualización. La instalación y ejecución en Linux/Cloud todavía
+   deben verificarse allí; las pruebas locales no equivalen a un despliegue exitoso.
+
+Los archivos necesarios están versionados: `app.py`, los módulos de `src/`,
+`.streamlit/config.toml`, `requirements.txt`, `data/transacciones.csv` y
+`data/etiquetas_evaluacion.csv`. El modelo se entrena al cargar, sin requerir un
+archivo de modelo local. El demo no depende de `.venv`, `.env`, un servidor
+PostgreSQL ni credenciales. Las etiquetas continúan leyéndose después de predecir.
+
+La verificación de despliegue volvió a aprobar las **133 pruebas** con `-W error`,
+ejecutadas secuencialmente en una copia temporal de `git archive HEAD` más los
+tres archivos de preparación modificados, sin `.env`, `.venv` ni Secrets locales.
+Se utilizó el intérprete y las bibliotecas del entorno instalado (Python 3.14.10);
+esto comprueba los recursos versionados, no una instalación nueva en Linux.
+`python -m pip check` no encontró conflictos. Se compararon los bloques TOML del
+tema y de `browser` con Git y resultaron idénticos. Una comprobación con el lector
+real de Secrets de Streamlit y un TOML temporal confirmó que la clave raíz
+selecciona CSV sin leer `.env`, manteniendo `postgres` como valor predeterminado.
+
+Se comprobó la exclusión de `.env`, variantes `.env.*`, Secrets de Streamlit y
+patrones de credenciales/claves mediante `.gitignore` y `git check-ignore`.
+La revisión del historial local cubrió 13 commits (incluidos sus mensajes) y 60 blobs únicos, incluidos
+seis no alcanzables: no se encontraron indicios de secretos reales; las
+coincidencias fueron ejemplos y fixtures explícitamente ficticios. No se leyó ni
+copió el `.env` local. Esta búsqueda heurística no garantiza ausencia absoluta de
+secretos ni cubre referencias remotas no presentes, artefactos o registros externos.
 
 ## Etapa 6: evaluación temporal progresiva
 

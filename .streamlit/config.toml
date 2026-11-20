@@ -47,8 +47,5 @@ borderColor = "#CFD8CE"
 paddingTop = "1.5rem"
 paddingBottom = "1.5rem"
 
-[server]
-address = "127.0.0.1"
-
 [browser]
 gatherUsageStats = false

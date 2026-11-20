@@ -1,7 +1,8 @@
-pandas
-numpy
-scikit-learn
-streamlit
-sqlalchemy
-psycopg[binary]
-python-dotenv
+# Versiones del entorno validado; seleccionar Python 3.14 en Community Cloud.
+pandas==3.1.1
+numpy==2.5.4
+scikit-learn==1.9.1
+streamlit==1.67.0
+sqlalchemy==2.1.8
+psycopg[binary]==3.3.8
+python-dotenv==1.2.4
