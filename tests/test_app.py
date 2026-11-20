@@ -1,6 +1,9 @@
-"""Streamlit y filtros con resultados ficticios, sin PostgreSQL ni etiquetas reales."""
+"""Dashboard con datos ficticios y CSV real, sin conexiones a PostgreSQL."""
 
 from datetime import date
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
@@ -9,6 +12,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 import app
+from src.preparar_datos import COLUMNAS_ORIGINALES
 
 
 def tearDownModule():
@@ -85,6 +89,9 @@ class FiltrosTests(unittest.TestCase):
 
 class CargaYAplicacionTests(unittest.TestCase):
     def setUp(self):
+        entorno = patch.dict(os.environ, {"DATA_SOURCE": "postgres"})
+        entorno.start()
+        self.addCleanup(entorno.stop)
         app.cargar_resultados.clear()
         self.addCleanup(app.cargar_resultados.clear)
         self.transacciones, self.resultado, self.etiquetas = datos_ficticios()
@@ -207,6 +214,133 @@ class CargaYAplicacionTests(unittest.TestCase):
                 self.assertEqual(len(aplicacion.error), 1)
                 self.assertNotIn("secreto_ficticio", aplicacion.error[0].value)
                 self.assertEqual(len(aplicacion.metric), 0)
+
+    def test_csv_comparte_pipeline_sin_db_y_con_etiquetas_posteriores(self):
+        originales = self.transacciones[list(COLUMNAS_ORIGINALES)]
+        with patch.dict(os.environ, {"DATA_SOURCE": "csv"}), \
+                patch.object(app, "cargar_transacciones_csv", return_value=originales) as lectura:
+            aplicacion = self.iniciar()
+            globales = [(m.label, m.value) for m in aplicacion.metric[:6]]
+            aplicacion.radio(key="filtro_resultado").set_value("Alertas").run()
+            aplicacion.toggle(key="mostrar_caracteristicas").set_value(True).run()
+            self.assertEqual(len(aplicacion.dataframe[0].value), 2)
+            self.assertEqual([(m.label, m.value) for m in aplicacion.metric[:6]], globales)
+            lectura.assert_called_once()
+            self.mocks[3].assert_called_once_with(originales)
+            self.assertEqual(self.eventos, ["predicciones", "etiquetas"])
+            self.assertTrue(any("CSV" in caption.value for caption in aplicacion.caption))
+            aplicacion.button(key="actualizar_resultados").click().run()
+            self.assertEqual(len(aplicacion.exception), 0)
+            self.assertEqual(aplicacion.radio(key="filtro_resultado").value, "Todas")
+            self.assertEqual(lectura.call_count, 2)
+            self.assertEqual(self.mocks[3].call_count, 2)
+        self.mocks[1].assert_not_called()
+        self.mocks[2].assert_not_called()
+        self.engine.dispose.assert_not_called()
+
+    def test_cache_distingue_fuentes_explicitas(self):
+        with patch.object(app, "cargar_transacciones_csv", return_value=self.transacciones) as lectura:
+            postgres = app.cargar_resultados("postgres")
+            csv = app.cargar_resultados("csv")
+            app.cargar_resultados("csv")
+        self.assertEqual(postgres["fuente_datos"], "postgres")
+        self.assertEqual(csv["fuente_datos"], "csv")
+        self.mocks[1].assert_called_once()
+        self.mocks[2].assert_called_once()
+        lectura.assert_called_once()
+        self.assertEqual(self.mocks[3].call_count, 2)
+
+    def test_error_csv_no_intenta_postgres_ni_expone_detalles(self):
+        with patch.dict(os.environ, {"DATA_SOURCE": "csv"}), \
+                patch.object(app, "cargar_transacciones_csv", side_effect=ValueError("secreto_ficticio")):
+            aplicacion = AppTest.from_string("import app\napp.main()", default_timeout=90).run()
+        self.assertEqual(len(aplicacion.exception), 0)
+        self.assertEqual(len(aplicacion.error), 1)
+        self.assertIn("transacciones.csv", aplicacion.error[0].value)
+        self.assertNotIn("secreto_ficticio", aplicacion.error[0].value)
+        for mock in self.mocks[1:]:
+            mock.assert_not_called()
+
+    def test_error_postgres_no_intenta_csv(self):
+        self.mocks[1].side_effect = RuntimeError("secreto_ficticio")
+        with patch.object(app, "cargar_transacciones_csv") as lectura:
+            aplicacion = AppTest.from_string("import app\napp.main()", default_timeout=90).run()
+        self.assertEqual(len(aplicacion.error), 1)
+        self.assertNotIn("secreto_ficticio", aplicacion.error[0].value)
+        lectura.assert_not_called()
+
+    def test_configuracion_invalida_no_carga_datos_ni_expone_valor(self):
+        with patch.dict(os.environ, {"DATA_SOURCE": "secreto_ficticio"}):
+            aplicacion = AppTest.from_string("import app\napp.main()", default_timeout=90).run()
+        self.assertEqual(len(aplicacion.exception), 0)
+        self.assertEqual(len(aplicacion.error), 1)
+        self.assertIn("DATA_SOURCE", aplicacion.error[0].value)
+        self.assertNotIn("secreto_ficticio", aplicacion.error[0].value)
+        for mock in self.mocks[1:]:
+            mock.assert_not_called()
+
+
+class CSVRealTests(unittest.TestCase):
+    def test_csv_real_sin_env_credenciales_o_db_reproduce_metricas_y_cache(self):
+        app.cargar_resultados.clear()
+        self.addCleanup(app.cargar_resultados.clear)
+        eventos = []
+        predecir_original = app.pipeline.entrenar_y_predecir
+        etiquetas_original = app.pipeline.cargar_etiquetas
+
+        def predecir(datos):
+            self.assertEqual(list(datos.columns), list(COLUMNAS_ORIGINALES))
+            self.assertEqual(len(datos), 1500)
+            self.assertNotIn("es_anomalia", datos)
+            resultado = predecir_original(datos)
+            self.assertEqual(len(resultado.entrenamiento), 1200)
+            eventos.append("predicciones")
+            return resultado
+
+        def etiquetas(ruta, ids):
+            self.assertEqual(eventos, ["predicciones"])
+            self.assertTrue(Path(ruta).is_absolute())
+            eventos.append("etiquetas")
+            return etiquetas_original(ruta, ids)
+
+        directorio_inicial = Path.cwd()
+        # Conservar variables de Windows (USERPROFILE, SystemRoot, etc.) que
+        # Streamlit necesita; eliminar únicamente la configuración de la DB.
+        entorno_demo = {clave: valor for clave, valor in os.environ.items()
+                        if not clave.startswith("DB_") and clave != "DATA_SOURCE"}
+        entorno_demo["DATA_SOURCE"] = "csv"
+        with TemporaryDirectory() as directorio, \
+                patch.dict(os.environ, entorno_demo, clear=True), \
+                patch("src.fuentes_datos._fuente_desde_env", side_effect=AssertionError("No leer .env")), \
+                patch.object(app.pipeline, "crear_engine", side_effect=AssertionError("No crear engine")) as engine, \
+                patch.object(app.pipeline, "cargar_transacciones", side_effect=AssertionError("No leer DB")) as db, \
+                patch("psycopg.connect", side_effect=AssertionError("No conectar")) as conexion, \
+                patch.object(app.pipeline, "entrenar_y_predecir", side_effect=predecir) as modelo, \
+                patch.object(app.pipeline, "cargar_etiquetas", side_effect=etiquetas), \
+                patch.object(app.pipeline, "evaluar_predicciones", wraps=app.pipeline.evaluar_predicciones) as evaluar:
+            try:
+                os.chdir(directorio)
+                self.assertEqual(len(app.cargar_transacciones_csv()), 1500)
+            finally:
+                os.chdir(directorio_inicial)
+            # El script de AppTest es temporal; probar la UI desde la raíz
+            # conserva la configuración visual del proyecto aprobado.
+            aplicacion = AppTest.from_string("import app\napp.main()", default_timeout=90).run()
+            self.assertEqual(len(aplicacion.exception), 0)
+            self.assertEqual(len(aplicacion.error), 0)
+            valores = [metrica.value for metrica in aplicacion.metric[:6]]
+            self.assertEqual(valores, [":red[300]", ":red[28]", ":red[3]", ":red[10,71%]",
+                                      ":red[100,00%]", ":red[19,35%]"])
+            self.assertEqual(len(aplicacion.dataframe[0].value), 300)
+            aplicacion.radio(key="filtro_resultado").set_value("Alertas").run()
+            self.assertEqual(len(aplicacion.dataframe[0].value), 28)
+            self.assertEqual([metrica.value for metrica in aplicacion.metric[:6]], valores)
+            modelo.assert_called_once()
+            evaluar.assert_called_once()
+            self.assertEqual(eventos, ["predicciones", "etiquetas"])
+            engine.assert_not_called()
+            db.assert_not_called()
+            conexion.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -41,8 +41,8 @@ posteriores al entrenamiento. Las etiquetas se consultan después de generar las
 predicciones, únicamente para medir resultados.
 
 La etapa 5 agrega una aplicación local de Streamlit para explorar las predicciones
-y revisar las métricas históricas. Reutiliza las etapas anteriores y mantiene la
-lectura de PostgreSQL sin modificar datos. Es una demostración académica con datos
+y revisar las métricas históricas. Reutiliza las etapas anteriores y admite la
+lectura de PostgreSQL o un modo demostración CSV, sin modificar datos. Es una demostración académica con datos
 sintéticos; una alerta no confirma fraude. No se conecta con bancos reales.
 
 La etapa 6 agrega una evaluación temporal complementaria con tres ventanas de
@@ -73,6 +73,7 @@ financial-anomaly-detector/
 ├── src/
 │   ├── generar_dataset.py         # Generador reproducible.
 │   ├── database.py                # Configuración y conexión de solo lectura.
+│   ├── fuentes_datos.py           # Fuente explícita y lectura validada del CSV.
 │   ├── verificar_conexion.py      # Verificación manual y lectura con Pandas.
 │   ├── preparar_datos.py          # Validación, referencias y características.
 │   ├── entrenar_modelo.py         # Isolation Forest y evaluación cronológica.
@@ -86,9 +87,10 @@ financial-anomaly-detector/
 ├── tests/
 │   ├── test_generar_dataset.py    # Validaciones del dataset con unittest.
 │   ├── test_database.py           # Pruebas de conexión sin una base real.
+│   ├── test_fuentes_datos.py      # Configuración y validación del modo CSV.
 │   ├── test_preparar_datos.py     # Características con datos ficticios, sin DB.
 │   ├── test_entrenar_modelo.py    # Separación, modelo y métricas sin DB.
-│   ├── test_app.py               # Interfaz con AppTest y datos ficticios.
+│   ├── test_app.py               # AppTest con datos ficticios y CSV real, sin DB.
 │   ├── test_evaluacion_temporal.py # Ventanas, causalidad y métricas sin DB.
 │   ├── test_analisis_errores.py   # Tasas, errores, ráfagas y diagnóstico sin DB.
 │   └── test_experimento_rafagas.py # Regla, escenarios y modelo fijo sin DB.
@@ -439,14 +441,42 @@ advertencias como errores:
 .\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
 ```
 
-## Etapa 5: aplicación local con Streamlit
+## Etapa 5: aplicación Streamlit con PostgreSQL o CSV
 
-Con PostgreSQL encendido y la configuración local de la etapa 3, ejecutar desde
-la raíz del proyecto:
+Ejecutar desde la raíz del proyecto, en PowerShell. El diseño y el pipeline son
+los mismos en ambos modos; `DATA_SOURCE` selecciona explícitamente la fuente.
+
+**Modo demostración CSV**, sin servidor PostgreSQL, credenciales ni archivo `.env`:
 
 ```powershell
+$env:DATA_SOURCE = "csv"
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
+
+**Modo PostgreSQL**, con el servicio activo y la configuración local de la etapa 3:
+
+```powershell
+$env:DATA_SOURCE = "postgres"
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+PostgreSQL sigue siendo el valor predeterminado. La variable del proceso tiene
+prioridad sobre `DATA_SOURCE` en el `.env` opcional de la raíz. Si no se define en
+ninguno, se utiliza `postgres`. Solo se aceptan los valores exactos `postgres` y
+`csv`; un valor inválido o un `.env` con errores de sintaxis muestra un error sin
+reproducir su contenido.
+Para volver al valor del archivo o al predeterminado en esta terminal:
+
+```powershell
+Remove-Item Env:DATA_SOURCE -ErrorAction SilentlyContinue
+```
+
+Detener y volver a iniciar Streamlit para cambiar la configuración. Seleccionar
+`csv` en PowerShell omite por completo la lectura de `.env` y la creación de
+motores/conexiones a PostgreSQL. No existe un cambio automático de fuente ante
+errores: PostgreSQL indisponible continúa mostrando su error de conexión.
+`DATA_SOURCE` controla el dashboard; los comandos de las etapas anteriores
+conservan su funcionamiento original con PostgreSQL.
 
 Abrir [http://localhost:8501](http://localhost:8501) en el navegador. Para detener
 el servidor, presionar **Ctrl+C** en la terminal.
@@ -477,9 +507,26 @@ globales permanecen referidos a toda la evaluación. Las etiquetas reales solo
 intervienen en las métricas históricas: no se usan para filtrar, entrenar ni
 mostrar la tabla operativa.
 
-Al cargar por primera vez, `cargar_resultados()` consulta PostgreSQL en modo de
-solo lectura, cierra sus recursos, ejecuta `entrenar_y_predecir` y luego carga las
-etiquetas para evaluar. Conserva una única entrada con resultados en memoria
+Al cargar por primera vez, `cargar_resultados(fuente)` consulta PostgreSQL en modo
+de solo lectura y cierra sus recursos, o lee `data/transacciones.csv` con Pandas.
+El lector CSV reutiliza `validar_y_convertir`: exige las ocho columnas originales,
+identificadores únicos y no vacíos, campos obligatorios completos, importes
+positivos y finitos y fechas válidas sin zona horaria. Conserva los identificadores
+como texto y convierte los importes y fechas con las validaciones compartidas.
+Las rutas del CSV, las etiquetas y el `.env` opcional se basan en la ubicación del
+proyecto, no en el directorio actual de la terminal. Si se inicia desde otra
+carpeta, pasar las rutas completas del intérprete y de `app.py` al comando.
+
+En ambos modos se ejecutan las mismas funciones `pipeline.entrenar_y_predecir()`
+y `pipeline.evaluar_predicciones()`. Se conservan la separación cronológica 80/20,
+las referencias ajustadas con entrenamiento, las tres características, el cálculo
+causal de frecuencia, los 200 árboles, `contamination="auto"`, `random_state=42`
+y el umbral original. Solo después de generar las predicciones se leen las
+etiquetas separadas para evaluar; nunca se incorporan al entrenamiento.
+La fuente aparece en el resumen y en la indicación existente de la barra lateral.
+
+La caché distingue la fuente mediante un argumento explícito y conserva una
+única entrada con resultados en memoria
 mediante `st.cache_data(max_entries=1)`, sin vencimiento automático. La caché es
 compartida por las sesiones del mismo servidor y cada ejecución recibe una copia;
 no conserva el modelo ni conexiones a la base y no persiste resultados en disco.
@@ -487,13 +534,17 @@ Cambiar filtros reutiliza esos resultados, sin reajustar referencias ni reentren
 
 El botón **Actualizar resultados** invalida esa caché, vuelve a consultar los
 datos y repite el entrenamiento y la evaluación. Usarlo cuando cambien los datos
-de PostgreSQL o las etiquetas. Reiniciar el servidor también borra la caché;
+de la fuente seleccionada o las etiquetas. Reiniciar el servidor también borra la caché;
 si cambia `.env`, reiniciar el proceso para aplicar la configuración de conexión
 de la etapa 3.
 
 La aplicación es local y no publica el proyecto ni modifica PostgreSQL o los
 CSV. Las pruebas de `tests/test_app.py` usan `AppTest` de Streamlit con datos
-ficticios, sin conectarse a PostgreSQL. Para ejecutar toda la suite:
+ficticios y el CSV real, bloqueando los accesos a PostgreSQL. Cubren las métricas
+calculadas, separación de etiquetas, caché por fuente, filtros, actualización,
+ausencia de respaldo automático y errores sin detalles sensibles. Las de
+`tests/test_fuentes_datos.py` cubren configuración y validación de la lectura CSV.
+Para ejecutar toda la suite secuencialmente:
 
 ```powershell
 .\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
@@ -505,6 +556,57 @@ La verificación local tras la mejora visual aprobó **77 pruebas**: las 67 ante
 métricas globales con una sola lectura y un solo entrenamiento. El servidor
 local inició correctamente y respondió con HTTP 200; se detuvo al terminar la
 prueba. Estas comprobaciones no requieren abrir otro navegador durante la suite.
+
+### Verificación del modo demostración CSV
+
+Pasaron **133 pruebas** con `-W error`: las 116 existentes y 17 adicionales.
+Se ejecutaron secuencialmente. La prueba del CSV real conserva las variables de
+Windows necesarias para Streamlit, elimina las cinco variables `DB_*`, bloquea
+la lectura de `.env` y los accesos a PostgreSQL, y comprueba las métricas, los
+300 movimientos y la caché al filtrar. También se leyó el CSV desde otro directorio.
+Los casos de configuración y datos mal formados se prueban con archivos temporales.
+
+Se compararon las fuentes usando la conexión de solo lectura existente: ambas
+contenían las mismas 1500 transacciones y 30 cuentas. Las predicciones y los
+puntajes resultaron idénticos, calculados mediante el pipeline original:
+
+| Fuente | Entrenamiento | Evaluación | Alertas | Precisión | Recall | F1-score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSV | 1200 | 300 | 28 | 10,71 % | 100,00 % | 19,35 % |
+| PostgreSQL | 1200 | 300 | 28 | 10,71 % | 100,00 % | 19,35 % |
+
+En ambos casos: TN=272, FP=25, FN=0 y TP=3; matriz de confusión `[[272,25],[0,3]]`
+(filas: clase real normal/anómala; columnas: predicción normal/alerta).
+Estos valores documentan esta ejecución; la interfaz sigue calculándolos con los
+datos cargados. No se agregaron dependencias ni se modificaron los CSV, el tema,
+la conexión, el entrenamiento ni los experimentos anteriores.
+
+También se inició el servidor Streamlit real en modo CSV sin las cinco variables
+de conexión. Respondió HTTP 200 y la comprobación de la aplicación mediante su
+API local mostró los 300 movimientos, las 28 alertas, los filtros y el detalle
+técnico. Las métricas y el momento de carga se conservaron al filtrar; actualizar
+resultados volvió a mostrar los 300 movimientos y restableció los filtros.
+La API se habilitó solo mediante una opción temporal de arranque para esta
+verificación; no se agregó a la configuración del proyecto.
+
+### Preparación para Streamlit Community Cloud
+
+Esta etapa no publica la aplicación. Un futuro despliegue usará `app.py` como
+punto de entrada, las dependencias existentes de `requirements.txt` y los dos CSV
+versionados. No necesita credenciales de PostgreSQL. Para seleccionar el demo,
+configurar `DATA_SOURCE = "csv"` como clave raíz en **Advanced settings → Secrets**;
+Streamlit expone las claves raíz también como variables de entorno. No subir
+`.env` ni contraseñas al repositorio. Ver la [documentación de secretos de
+Streamlit](https://docs.streamlit.io/develop/concepts/connections/secrets-management).
+
+Se revisó `.streamlit/config.toml` y se conserva sin cambios, incluido el tema
+aprobado y `browser.gatherUsageStats = false`. Su `server.address = "127.0.0.1"`
+limita el servidor al equipo local: antes de desplegar, revisar el enlace de red
+de la plataforma y quitar o sobrescribir esa dirección (por ejemplo, con
+`STREAMLIT_SERVER_ADDRESS=0.0.0.0`) y usar inicio sin navegador (`server.headless`).
+Las [variables de entorno y opciones de arranque de Streamlit](https://docs.streamlit.io/develop/concepts/configuration/options)
+permiten sobrescribir la configuración sin tocar el tema. No hace falta desactivar
+las protecciones CORS/XSRF ni habilitar interfaces de prueba en un despliegue.
 
 ## Etapa 6: evaluación temporal progresiva
 

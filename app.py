@@ -6,6 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from src import entrenar_modelo as pipeline
+from src.fuentes_datos import (
+    ErrorFuenteDatos, cargar_transacciones_csv, obtener_fuente_datos, validar_fuente_datos,
+)
 
 
 class ErrorAplicacion(RuntimeError):
@@ -13,29 +16,40 @@ class ErrorAplicacion(RuntimeError):
 
 
 @st.cache_data(show_spinner=False, max_entries=1)
-def cargar_resultados() -> dict:
+def cargar_resultados(fuente: str = "postgres") -> dict:
     """Una ejecución de 4B por caché; no conserva motores, conexiones ni modelos.
 
     Sin TTL: interactuar con filtros nunca provoca una recarga por vencimiento.
-    La actualización es explícita. Streamlit entrega una copia de los datos.
+    La actualización es explícita. La fuente es parte de la clave de caché.
+    Streamlit entrega una copia de los datos.
     """
-    try:
-        engine = pipeline.crear_engine()
+    validar_fuente_datos(fuente)
+    if fuente == "csv":
         try:
-            transacciones = pipeline.cargar_transacciones(engine)
-        finally:
-            engine.dispose()
-    except Exception:
-        raise ErrorAplicacion(
-            "No se pudo leer PostgreSQL o cerrar la conexión. Revisá que el servicio esté activo, "
-            "la configuración local de .env y los permisos de lectura."
-        ) from None
+            transacciones = cargar_transacciones_csv()
+        except Exception:
+            raise ErrorAplicacion(
+                "No se pudo leer o validar data/transacciones.csv. Revisá que exista y tenga las ocho "
+                "columnas originales, identificadores únicos, importes positivos y fechas válidas."
+            ) from None
+    else:
+        try:
+            engine = pipeline.crear_engine()
+            try:
+                transacciones = pipeline.cargar_transacciones(engine)
+            finally:
+                engine.dispose()
+        except Exception:
+            raise ErrorAplicacion(
+                "No se pudo leer PostgreSQL o cerrar la conexión. Revisá que el servicio esté activo, "
+                "la configuración local de .env y los permisos de lectura."
+            ) from None
     try:
         resultado = pipeline.entrenar_y_predecir(transacciones)
     except Exception:
         raise ErrorAplicacion(
             "No se pudieron preparar los datos o entrenar el detector. "
-            "Revisá el formato de public.transacciones y las dependencias del entorno."
+            "Revisá los datos de la fuente seleccionada y las dependencias del entorno."
         ) from None
     try:
         # Predicciones ya generadas: etiquetas exclusivamente para métricas históricas.
@@ -44,9 +58,10 @@ def cargar_resultados() -> dict:
     except Exception:
         raise ErrorAplicacion(
             "No se pudo completar la evaluación histórica. Revisá data/etiquetas_evaluacion.csv "
-            "y su correspondencia con los identificadores de PostgreSQL."
+            "y su correspondencia con los identificadores de la fuente seleccionada."
         ) from None
     return {
+        "fuente_datos": fuente,
         "predicciones": resultado.predicciones,
         "total_transacciones": len(transacciones),
         "cuentas": int(transacciones["cuenta_id"].nunique()),
@@ -95,19 +110,25 @@ def main() -> None:
         st.caption("Explorá movimientos bancarios sintéticos, revisá las alertas de Isolation Forest "
                    "y conocé cómo se evalúan sus resultados.")
 
+    try:
+        fuente = obtener_fuente_datos()
+    except ErrorFuenteDatos as error:
+        st.error(str(error))
+        st.stop()
+    nombre_fuente = "PostgreSQL" if fuente == "postgres" else "data/transacciones.csv"
     with st.sidebar:
         st.markdown("### Panel de exploración")
         st.caption("Una mirada a lo inusual en los datos.")
         actualizar = st.button("Actualizar resultados", key="actualizar_resultados", width="stretch",
                                type="primary", icon=":material/refresh:",
-                               help="Vuelve a leer PostgreSQL, entrenar y evaluar con la configuración fija de 4B.")
+                               help=f"Vuelve a leer {nombre_fuente}, entrenar y evaluar con la configuración fija de 4B.")
         if actualizar:
             cargar_resultados.clear()
             for clave in ("filtro_cuenta", "filtro_fechas", "filtro_resultado"):
                 st.session_state.pop(clave, None)
     try:
         with st.spinner("Cargando el dataset y los resultados del detector…"):
-            datos = cargar_resultados()
+            datos = cargar_resultados(fuente)
     except ErrorAplicacion as error:
         st.error(str(error))
         st.caption("Después de corregir el problema, pulsá Actualizar resultados.")
@@ -120,9 +141,11 @@ def main() -> None:
     primera, ultima = predicciones["fecha_hora"].min().date(), predicciones["fecha_hora"].max().date()
     tn, fp, fn, tp = (int(valor) for valor in datos["matriz_confusion"].ravel())
     reales = tp + fn
+    fuente_csv = datos["fuente_datos"] == "csv"
+    descripcion_fuente = "CSV en modo demostración" if fuente_csv else "PostgreSQL en solo lectura"
     st.caption(
         f"Dataset completo: {datos['total_transacciones']:,} movimientos · {datos['cuentas']} cuentas · "
-        f"Entrenamiento: {datos['entrenamiento']:,} · Evaluación: {len(predicciones):,} · PostgreSQL en solo lectura"
+        f"Entrenamiento: {datos['entrenamiento']:,} · Evaluación: {len(predicciones):,} · {descripcion_fuente}"
     )
     st.subheader("Evaluación global")
     st.caption(f"Del {primera:%d/%m/%Y} al {ultima:%d/%m/%Y} · Evaluación completa, independiente de los filtros.")
@@ -159,7 +182,8 @@ def main() -> None:
                              help="Normales significa sin alerta del modelo; no es una validación de la operación.")
         st.caption("Los filtros cambian la vista, no la evaluación global. No vuelven a entrenar el modelo.")
         st.space("small")
-        st.badge("PostgreSQL · solo lectura", icon=":material/database:", color="blue")
+        st.badge("CSV · modo demostración" if fuente_csv else "PostgreSQL · solo lectura",
+                 icon=":material/database:", color="blue")
         st.caption(f"Resultados cargados: {datos['actualizado']:%d/%m/%Y %H:%M %Z}")
         st.caption("Para incorporar cambios en los datos, usá Actualizar resultados.")
 
