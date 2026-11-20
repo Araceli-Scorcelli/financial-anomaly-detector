@@ -1,23 +1,51 @@
 [theme]
 base = "light"
-primaryColor = "#0f766e"
-backgroundColor = "#f8fafc"
-secondaryBackgroundColor = "#eef3f7"
-textColor = "#172b4d"
-font = "sans serif"
-borderColor = "#dce4ed"
-baseRadius = "0.75rem"
+# Identidad: Snow, Vert d'eau, Bleu canard y Bordeaux.
+primaryColor = "#733635"
+backgroundColor = "#F6F5ED"
+secondaryBackgroundColor = "#EBECDC"
+textColor = "#11363E"
+font = "sans-serif"
+headingFont = "serif"
+headingFontSizes = ["2.5rem", "1.75rem", "1.35rem", "1.15rem", "1rem", "0.9rem"]
+headingFontWeights = [500, 500, 500, 600, 600, 600]
+linkColor = "#733635"
+borderColor = "#CFD8CE"
+baseRadius = "0.85rem"
+buttonRadius = "0.6rem"
 showSidebarBorder = true
-metricValueFontSize = "2rem"
+metricValueFontSize = "2.1rem"
 metricValueFontWeight = 600
-paddingTop = "1.5rem"
+paddingTop = "1.25rem"
 paddingBottom = "2rem"
 
+# Acentos semánticos: los tonos claros son rellenos, no textos pequeños.
+redColor = "#733635"
+redTextColor = "#733635"
+redBackgroundColor = "#F2E6DF"
+blueColor = "#A0C9CB"
+blueTextColor = "#11363E"
+blueBackgroundColor = "#E4EEEA"
+orangeColor = "#FF6038"
+orangeTextColor = "#361E1C"
+orangeBackgroundColor = "#FBE4D8"
+codeTextColor = "#733635"
+codeBackgroundColor = "#EBECDC"
+chartCategoricalColors = ["#A0C9CB", "#FF6038", "#733635", "#11363E"]
+dataframeHeaderBackgroundColor = "#EBECDC"
+dataframeHeaderTextColor = "#11363E"
+dataframeBorderColor = "#CFD8CE"
+
 [theme.sidebar]
-backgroundColor = "#eef3f7"
-secondaryBackgroundColor = "#ffffff"
-textColor = "#172b4d"
-paddingTop = "1rem"
+backgroundColor = "#EBECDC"
+secondaryBackgroundColor = "#F6F5ED"
+textColor = "#11363E"
+primaryColor = "#11363E"
+headingFont = "sans-serif"
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+borderColor = "#CFD8CE"
+paddingTop = "1.5rem"
+paddingBottom = "1.5rem"
 
 [server]
 address = "127.0.0.1"

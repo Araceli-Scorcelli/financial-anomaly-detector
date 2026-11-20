@@ -88,13 +88,18 @@ def preparar_tabla(predicciones: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> None:
     st.set_page_config(page_title="Financial Anomaly Detector", page_icon=":material/analytics:", layout="wide")
-    st.title("Financial Anomaly Detector")
-    st.markdown("Explorá movimientos bancarios sintéticos y revisá **anomalías potenciales** con Isolation Forest.")
+    with st.container(gap="xsmall"):
+        st.caption("ANÁLISIS FINANCIERO · PROYECTO ACADÉMICO")
+        st.title("Financial Anomaly Detector")
+        st.markdown("**Detección de anomalías mediante aprendizaje no supervisado.**")
+        st.caption("Explorá movimientos bancarios sintéticos, revisá las alertas de Isolation Forest "
+                   "y conocé cómo se evalúan sus resultados.")
 
     with st.sidebar:
-        st.markdown("## Panel de exploración")
-        st.caption("Proyecto académico · Datos ficticios")
+        st.markdown("### Panel de exploración")
+        st.caption("Una mirada a lo inusual en los datos.")
         actualizar = st.button("Actualizar resultados", key="actualizar_resultados", width="stretch",
+                               type="primary", icon=":material/refresh:",
                                help="Vuelve a leer PostgreSQL, entrenar y evaluar con la configuración fija de 4B.")
         if actualizar:
             cargar_resultados.clear()
@@ -120,7 +125,7 @@ def main() -> None:
         f"Entrenamiento: {datos['entrenamiento']:,} · Evaluación: {len(predicciones):,} · PostgreSQL en solo lectura"
     )
     st.subheader("Evaluación global")
-    st.caption(f"Del {primera:%d/%m/%Y} al {ultima:%d/%m/%Y}. Estos indicadores no cambian con los filtros.")
+    st.caption(f"Del {primera:%d/%m/%Y} al {ultima:%d/%m/%Y} · Evaluación completa, independiente de los filtros.")
     indicadores = [
         ("Transacciones evaluadas", str(len(predicciones)), "Operaciones del bloque temporal posterior al entrenamiento."),
         ("Alertas generadas", str(int(predicciones["prediccion_anomalia"].sum())), "Operaciones que superan el umbral del detector."),
@@ -131,18 +136,20 @@ def main() -> None:
     ]
     with st.grid(3, min_column_width=260, gap="small", key="indicadores_globales"):
         for etiqueta, valor, ayuda in indicadores:
-            st.metric(etiqueta, valor, help=ayuda, border=True, height="stretch")
+            # Markdown nativo: Bordeaux del tema, sin cambiar el valor calculado.
+            st.metric(etiqueta, f":red[{valor}]", help=ayuda, border=True, height="stretch")
     ausentes = datos["por_tipo"].loc[datos["por_tipo"]["reales"] == 0, "tipo_anomalia"].tolist()
     aviso = (f"Evaluación histórica sobre {reales} anomalías sintéticas: {tp} detectadas, {fn} no detectadas "
              f"y {fp} falsas alertas. ")
     if ausentes:
         aviso += f"Sin casos para evaluar: {', '.join(ausentes)}. "
-    aviso += "Una alerta requiere revisión; no confirma fraude ni garantiza rendimiento en datos reales."
-    st.info(aviso)
+    aviso += "Una anomalía no implica fraude. Estas cifras describen datos sintéticos."
+    st.info(aviso, icon=":material/info:")
 
     with st.sidebar:
-        st.divider()
-        st.subheader("Filtros de visualización")
+        st.space("small")
+        st.markdown("### Filtros de visualización")
+        st.caption("Elegí qué movimientos querés explorar.")
         cuenta = st.selectbox("Cuenta", [None, *sorted(predicciones["cuenta_id"].unique())],
                               format_func=lambda valor: "Todas las cuentas" if valor is None else valor,
                               key="filtro_cuenta")
@@ -150,34 +157,43 @@ def main() -> None:
                                max_value=ultima, format="DD/MM/YYYY", key="filtro_fechas")
         resultado = st.radio("Resultado", ["Todas", "Alertas", "Normales"], key="filtro_resultado",
                              help="Normales significa sin alerta del modelo; no es una validación de la operación.")
-        st.caption("Los filtros solo cambian la tabla y el gráfico. El modelo y sus referencias permanecen fijos.")
-        st.divider()
+        st.caption("Los filtros cambian la vista, no la evaluación global. No vuelven a entrenar el modelo.")
+        st.space("small")
+        st.badge("PostgreSQL · solo lectura", icon=":material/database:", color="blue")
         st.caption(f"Resultados cargados: {datos['actualizado']:%d/%m/%Y %H:%M %Z}")
         st.caption("Para incorporar cambios en los datos, usá Actualizar resultados.")
 
     st.subheader("Exploración de movimientos")
-    st.caption("Vista filtrada del conjunto de evaluación. Cantidades independientes de los indicadores globales.")
+    st.caption("Usá los filtros del panel lateral para recorrer el conjunto de evaluación.")
     try:
         filtradas = filtrar_transacciones(predicciones, cuenta, fechas, resultado)
     except ValueError as error:
         st.info(str(error))
         return
     cantidad_alertas = int(filtradas["prediccion_anomalia"].sum())
-    grafico, conteos = st.columns([3, 1])
-    with conteos:
-        st.metric("Movimientos visibles", str(len(filtradas)))
-        st.metric("Alertas visibles", str(cantidad_alertas))
+    with st.container(border=True, key="resumen_seleccion"):
+        st.markdown("**Distribución de los movimientos seleccionados**")
+        grafico, conteos = st.columns([3, 2], vertical_alignment="center", gap="small")
+        with conteos:
+            with st.grid(2, min_column_width=150, gap="small"):
+                st.metric("Movimientos visibles", str(len(filtradas)))
+                st.metric("Alertas visibles", str(cantidad_alertas))
+        if not filtradas.empty:
+            with grafico:
+                conteo = pd.DataFrame({"Normales": [len(filtradas) - cantidad_alertas], "Alertas": [cantidad_alertas]},
+                                      index=pd.Index(["Vista filtrada"], name="Selección"))
+                st.bar_chart(conteo, y=["Normales", "Alertas"],
+                             color=st.get_option("theme.chartCategoricalColors")[:2],
+                             horizontal=True, stack=False, height=190, width="stretch",
+                             x_label="", y_label="Movimientos",
+                             alt="Cantidad de operaciones normales y alertas de la vista filtrada.")
+        st.caption("Aqua: operaciones sin alerta · Coral: alertas potenciales para revisar.")
     if filtradas.empty:
         st.info("No hay movimientos para esta combinación de filtros. Probá otra cuenta, fechas o resultado.")
         return
-    with grafico:
-        conteo = pd.DataFrame({"Normales": [len(filtradas) - cantidad_alertas], "Alertas": [cantidad_alertas]},
-                              index=pd.Index(["Vista filtrada"], name="Selección"))
-        st.bar_chart(conteo, y=["Normales", "Alertas"], color=["#0f766e", "#d97706"],
-                     horizontal=True, stack=False, height=180, width="stretch",
-                     x_label="", y_label="Movimientos",
-                     alt="Cantidad de operaciones normales y alertas de la vista filtrada.")
-    st.caption(f"Puntaje mayor = operación más inusual · Alerta si puntaje > {datos['umbral']:.2f} · El puntaje no es una probabilidad")
+    st.markdown("#### Detalle de transacciones")
+    st.caption(f"Ordenadas de mayor a menor puntaje · Alerta si puntaje > {datos['umbral']:.2f} · "
+               "El puntaje no representa una probabilidad de fraude.")
     mostrar_caracteristicas = st.toggle(
         "Mostrar características técnicas", key="mostrar_caracteristicas",
         help="Agrega monto relativo, rareza horaria y movimientos en cinco minutos al final de la tabla. No recalcula el modelo.",
@@ -185,9 +201,10 @@ def main() -> None:
     tabla = preparar_tabla(filtradas)
     if not mostrar_caracteristicas:
         tabla = tabla.iloc[:, :6]
-    estilo = tabla.style.map(lambda estado: "background-color: #fff3d6; color: #8a4b08; font-weight: 600;"
-                            if estado == "Alerta potencial" else "color: #526176;", subset=["estado"])
-    st.dataframe(estilo, hide_index=True, width="stretch", height=410, row_height=36,
+    estilo = tabla.style.map(lambda estado: "background-color: #FBE4D8; color: #361E1C; font-weight: 600;"
+                            if estado == "Alerta potencial" else "background-color: #E4EEEA; color: #11363E;",
+                            subset=["estado"])
+    st.dataframe(estilo, hide_index=True, width="stretch", height=410, row_height=38,
                  alt="Transacciones del conjunto de evaluación, ordenadas por puntaje de anomalía, con su resultado.",
                  column_config={
                      "transaccion_id": st.column_config.TextColumn("Transacción", width=110, pinned=True),
@@ -205,7 +222,7 @@ def main() -> None:
                      "movimientos_5min": st.column_config.NumberColumn("Movimientos / 5 min", format="%d",
                                                                        help="Operaciones de la cuenta en los cinco minutos anteriores, incluida la actual."),
                  })
-    with st.expander("Cómo leer las características"):
+    with st.expander("Cómo leer las características", icon=":material/query_stats:"):
         st.markdown(
             "- **Monto relativo:** compara el importe con su mediana de referencia. "
             "Un valor de 1 equivale a esa mediana; 3 significa tres veces ese importe.\n"
@@ -216,11 +233,11 @@ def main() -> None:
         st.caption("Estas características describen el movimiento. No son una explicación causal de cada alerta "
                    "ni permiten atribuirla a una variable específica. Isolation Forest combina las tres "
                    "para asignar un puntaje; una alerta potencial no confirma fraude.")
-    with st.expander("Cómo interpretar esta evaluación"):
+    with st.expander("Cómo interpretar esta evaluación", icon=":material/school:"):
         st.markdown(
             "**Precisión:** cuántas alertas coinciden con las etiquetas. **Recall:** cuántas anomalías "
             "etiquetadas fueron detectadas. **F1:** equilibrio entre ambas. Las etiquetas se consultan "
-            "después de predecir y se usan únicamente para esta evaluación histórica."
+            "después de predecir y se usan únicamente para evaluar, no para entrenar."
         )
         st.caption(f"Matriz global: normales bien identificadas {tn}, falsos positivos {fp}, "
                    f"falsos negativos {fn}, anomalías detectadas {tp}.")

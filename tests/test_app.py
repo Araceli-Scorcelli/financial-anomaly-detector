@@ -131,7 +131,7 @@ class CargaYAplicacionTests(unittest.TestCase):
     def test_filtros_no_reentrenan_ni_cambian_metricas_globales(self):
         aplicacion = self.iniciar()
         globales = [(m.label, m.value) for m in aplicacion.metric[:6]]
-        self.assertEqual(globales[0], ("Transacciones evaluadas", "4"))
+        self.assertEqual(globales[0], ("Transacciones evaluadas", ":red[4]"))
         aplicacion.selectbox(key="filtro_cuenta").select("B").run()
         aplicacion.date_input(key="filtro_fechas").set_value((date(2026, 3, 14), date(2026, 3, 14))).run()
         aplicacion.radio(key="filtro_resultado").set_value("Alertas").run()
@@ -150,7 +150,7 @@ class CargaYAplicacionTests(unittest.TestCase):
         globales = [(m.label, m.value) for m in aplicacion.metric[:6]]
         grilla = aplicacion.get_by_key("indicadores_globales")
         self.assertEqual(len(grilla.metric), 6)
-        self.assertEqual(globales[4], ("Recall", "100,00%"))
+        self.assertEqual(globales[4], ("Recall", ":red[100,00%]"))
         self.assertTrue(all(m.proto.help for m in grilla.metric))
         principales = ["transaccion_id", "cuenta_id", "fecha_hora", "monto", "estado", "puntaje_anomalia"]
         tabla_inicial = aplicacion.dataframe[0].value.copy()
