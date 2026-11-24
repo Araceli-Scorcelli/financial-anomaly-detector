@@ -4,6 +4,14 @@ Proyecto académico de Ciencia de Datos e Inteligencia Artificial para estudiar 
 
 El objetivo es comprender el funcionamiento y los límites de **Isolation Forest**, no construir un sistema bancario ni clasificar operaciones como fraudulentas. Todos los movimientos son sintéticos y las etiquetas de anomalía se reservan para la evaluación.
 
+## Aplicación online
+
+La demostración interactiva está publicada mediante Streamlit Community Cloud:
+
+**[Abrir Financial Anomaly Detector](https://financial-anomaly-detector-5wzvcxhptf9mubphaiabrg.streamlit.app/)**
+
+La aplicación permite explorar el análisis de transacciones sintéticas. No se conecta con bancos reales ni confirma fraudes. Quien prefiera ejecutar una copia en su computadora puede utilizar el modo CSV descrito más abajo, sin disponer de PostgreSQL.
+
 ## Experiencia y resultados principales
 
 - **Datos:** 1.500 transacciones sintéticas de enero a marzo de 2026, distribuidas entre 30 cuentas. Se incorporaron 30 anomalías conocidas: 10 de importe, 10 de horario y 10 de concentración temporal.
@@ -626,7 +634,11 @@ resultados volvió a mostrar los 300 movimientos y restableció los filtros.
 La API se habilitó solo mediante una opción temporal de arranque para esta
 verificación; no se agregó a la configuración del proyecto.
 
-### Preparación para Streamlit Community Cloud
+### Aplicación publicada en Streamlit Community Cloud
+
+Enlace público de la demostración: **[Financial Anomaly Detector](https://financial-anomaly-detector-5wzvcxhptf9mubphaiabrg.streamlit.app/)**.
+
+Esta sección conserva las decisiones técnicas de preparación del despliegue y las instrucciones para reproducirlo o actualizarlo. La dirección pública es distinta de `http://localhost:8501`, que solo funciona al ejecutar la aplicación localmente.
 
 La revisión de despliegue quitó únicamente `[server] address = "127.0.0.1"` de
 `.streamlit/config.toml`, para que la plataforma gestione la dirección y el puerto.
@@ -653,12 +665,10 @@ permite elegirlas en [Advanced settings](https://docs.streamlit.io/deploy/stream
 No depender de la versión predeterminada de la plataforma ni usar `runtime.txt`
 como sustituto de esa selección. El parche concreto de Python lo gestiona Cloud.
 
-Pasos manuales cuando se decida publicar:
+Guía para reproducir o actualizar el despliegue:
 
-1. Guardar y sincronizar manualmente estos cambios con GitHub. Esta revisión no
-   realiza commits, push ni despliegues; Cloud usa el contenido remoto, no el de VS Code.
-2. En **Create app**, elegir el repositorio, la rama `feature/redesign-streamlit`
-   y **Main file path: `app.py`**. En **Advanced settings**, seleccionar Python 3.14.
+1. Guardar y sincronizar los cambios con GitHub; Streamlit Community Cloud usa el contenido remoto y no el de VS Code.
+2. Para un nuevo despliegue, elegir el repositorio, la rama que contenga la versión deseada y **Main file path: `app.py`**. En **Advanced settings**, seleccionar Python 3.14. Para actualizar la aplicación existente, comprobar primero qué rama tiene configurada en Community Cloud.
 3. En **Secrets**, pegar únicamente esta configuración TOML, en la raíz, sin una
    sección `[database]` o `[DATA_SOURCE]`:
 
@@ -671,10 +681,9 @@ Pasos manuales cuando se decida publicar:
    aplicación, según la [documentación de Secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management).
    Sin esa selección explícita, el proyecto sigue usando PostgreSQL por defecto;
    no hay respaldo automático hacia CSV.
-5. Después del despliegue manual, revisar los logs de instalación y comprobar
+5. Tras un despliegue o actualización, revisar los logs de instalación y comprobar
    300 movimientos evaluados, 28 alertas y las métricas documentadas arriba, además
-   de filtros y actualización. La instalación y ejecución en Linux/Cloud todavía
-   deben verificarse allí; las pruebas locales no equivalen a un despliegue exitoso.
+   de filtros y actualización. Las pruebas locales no sustituyen una verificación de la aplicación en Community Cloud.
 
 Los archivos necesarios están versionados: `app.py`, los módulos de `src/`,
 `.streamlit/config.toml`, `requirements.txt`, `data/transacciones.csv` y
