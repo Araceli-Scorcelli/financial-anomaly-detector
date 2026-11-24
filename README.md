@@ -1,11 +1,38 @@
 # Financial Anomaly Detector
 
-Proyecto académico en Python para explorar la detección de anomalías en
-transacciones financieras. El alcance previsto es pequeño y realizable en
-2 o 3 semanas: trabajar con un único conjunto de datos CSV, un modelo de
-detección de anomalías y una visualización sencilla.
+Proyecto académico de Ciencia de Datos e Inteligencia Artificial para estudiar cómo un modelo de **aprendizaje no supervisado** identifica comportamientos inusuales en transacciones financieras sintéticas. Se implementó con Python, Pandas, PostgreSQL, scikit-learn y Streamlit.
 
-## Estado actual
+El objetivo es comprender el funcionamiento y los límites de **Isolation Forest**, no construir un sistema bancario ni clasificar operaciones como fraudulentas. Todos los movimientos son sintéticos y las etiquetas de anomalía se reservan para la evaluación.
+
+## Experiencia y resultados principales
+
+- **Datos:** 1.500 transacciones sintéticas de enero a marzo de 2026, distribuidas entre 30 cuentas. Se incorporaron 30 anomalías conocidas: 10 de importe, 10 de horario y 10 de concentración temporal.
+- **Características del modelo:** `monto_relativo`, `rareza_horaria` (24 franjas de una hora, con suavizado) y `movimientos_5min` (conteo causal por cuenta).
+- **Entrenamiento:** Isolation Forest con 200 árboles, sin etiquetas de anomalía y con un umbral de alerta de 0,5.
+- **Evaluación:** separación cronológica inicial de 1.200 operaciones para entrenamiento y 300 para evaluación; después, tres ventanas temporales con 600, 900 y 1.200 operaciones de entrenamiento, respectivamente.
+- **Exploración adicional:** análisis de falsos positivos y anomalías no detectadas, más una comparación experimental con una regla de concentración. La regla **no se incorporó** al detector principal.
+
+| Evaluación | Operaciones evaluadas | Anomalías conocidas | Detectadas | Falsas alertas | Precision | Recall | F1-score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inicial (1.200/300) | 300 | 3 | 3 | 25 | 10,71 % | 100 % | 19,35 % |
+| Tres ventanas progresivas | 900 | 20 | 14 | 120 | 10,45 % | 70 % | 18,18 % |
+
+La evaluación inicial coincide con la tercera ventana y **no se contabiliza dos veces**. La regla experimental elevó las detecciones de 14 a 17 en las 900 operaciones históricas, pero en 180 escenarios sintéticos nuevos de abril de 2026 ambos enfoques obtuvieron los mismos resultados. Esto no demuestra desempeño en operaciones financieras reales.
+
+## Probar la aplicación sin PostgreSQL
+
+Con Python instalado, desde la carpeta raíz del repositorio (PowerShell en Windows):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:DATA_SOURCE = "csv"
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+El modo `csv` permite explorar la demostración con los archivos sintéticos incluidos en `data/`, sin configurar una base local. Para usar PostgreSQL o reproducir los experimentos desde consola, consultá las instrucciones detalladas de las secciones siguientes. Las pruebas automatizadas se ejecutan con `python -m unittest discover -s tests -v`.
+
+## Desarrollo del proyecto
 
 La primera etapa genera un dataset bancario sintético con Pandas y NumPy,
 reproducible con semilla 42: 1500 movimientos de 30 cuentas entre enero y marzo
@@ -1219,9 +1246,9 @@ También verifican errores de conexión seguros, sin una base real.
 .\.venv\Scripts\python.exe -X utf8 -W error -m unittest discover -s tests -v
 ```
 
-Los módulos anteriores, la conexión, CSV, dependencias y Streamlit conservaron
-sus hashes SHA-256. No se incorporaron dependencias, no se modificó PostgreSQL
-y no se realizaron commits. Los datos nuevos y los resultados quedan en memoria
+En la ejecución de esta etapa se verificó que los módulos anteriores, la conexión,
+los CSV, las dependencias y Streamlit conservaran sus hashes SHA-256.
+El experimento no incorpora dependencias ni modifica PostgreSQL. Los datos nuevos y los resultados quedan en memoria
 y consola; ejecutar el comando no escribe archivos del dataset.
 
 ## Generación y validación
@@ -1248,12 +1275,10 @@ conexiones reales de Psycopg. Comprueban la configuración, la protección de so
 lectura, la lectura con Pandas y la liberación de recursos sin requerir PostgreSQL
 ni credenciales. La suite no sustituye la verificación manual de la conexión local.
 
-## Alcance y cronograma orientativo
+## Alcance y limitaciones
 
-- Semana 1: generar y validar el dataset sintético; explorarlo y preparar los datos con Pandas.
-- Semana 2: implementar un único modelo con Scikit-learn y revisar las anomalías detectadas.
-- Semana 3: crear una vista sencilla con Streamlit, agregar pruebas básicas y completar la documentación.
+Este repositorio documenta una experiencia académica reproducible con datos sintéticos. Se incluyen la generación de transacciones, las transformaciones de características, el entrenamiento, la evaluación temporal, el análisis de errores, la comparación experimental y una aplicación local para explorar resultados.
 
-Para terminar en 2 semanas, combinar la visualización y la documentación con la
-segunda semana. Quedan fuera del alcance las conexiones bancarias, el análisis
-en tiempo real y el despliegue en producción.
+No se conecta con bancos reales, no valida fraude ni está preparado para producción o análisis en tiempo real. Las etiquetas conocidas sirven para medir resultados y no son entradas del modelo. La interpretación de una alerta requiere considerar el contexto de cada operación y las limitaciones de los datos.
+
+El código principal, los datos de ejemplo, las pruebas y la documentación técnica se conservan en el repositorio. El archivo `.env`, las contraseñas locales y `.streamlit/secrets.toml` no deben versionarse.
