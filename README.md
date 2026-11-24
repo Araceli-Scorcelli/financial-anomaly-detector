@@ -23,7 +23,7 @@ $env:DATA_SOURCE = "csv"
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-El modo `csv` utiliza los archivos sintéticos incluidos en `data/`: no requiere instalar PostgreSQL ni configurar credenciales. Es la alternativa más sencilla para probar el dashboard en una computadora propia. Una vez iniciado Streamlit, abrir [http://localhost:8501](http://localhost:8501) en esa misma computadora.
+El modo `csv` utiliza los archivos sintéticos incluidos en `data/`, sin necesidad de instalar PostgreSQL ni configurar credenciales. Es la alternativa recomendada para ejecutar el dashboard localmente. Una vez iniciado Streamlit, abrir [http://localhost:8501](http://localhost:8501) en esa misma computadora.
 
 **Importante:** el código conserva `postgres` como fuente predeterminada cuando no se define `DATA_SOURCE`. Por eso, para usar los CSV localmente es necesario establecer `DATA_SOURCE=csv` como indica el comando anterior.
 
@@ -38,7 +38,7 @@ El modo `csv` utiliza los archivos sintéticos incluidos en `data/`: no requiere
 
 El uso de PostgreSQL se mantiene como parte del desarrollo original y de la reproducción técnica de los experimentos, pero **no es un requisito para explorar la aplicación**, ni online ni con el modo CSV local. Las instrucciones de configuración y los comandos de los experimentos aparecen más adelante. Las pruebas automatizadas pueden ejecutarse con `python -m unittest discover -s tests -v`.
 
-## Experiencia y resultados principales
+## Datos y resultados principales
 
 - **Datos:** 1.500 transacciones sintéticas de enero a marzo de 2026, distribuidas entre 30 cuentas. Se incorporaron 30 anomalías conocidas: 10 de importe, 10 de horario y 10 de concentración temporal.
 - **Características del modelo:** `monto_relativo`, `rareza_horaria` (24 franjas de una hora, con suavizado) y `movimientos_5min` (conteo causal por cuenta).
@@ -46,7 +46,7 @@ El uso de PostgreSQL se mantiene como parte del desarrollo original y de la repr
 - **Evaluación:** separación cronológica inicial de 1.200 operaciones para entrenamiento y 300 para evaluación; después, tres ventanas temporales con 600, 900 y 1.200 operaciones de entrenamiento, respectivamente.
 - **Exploración adicional:** análisis de falsos positivos y anomalías no detectadas, más una comparación experimental con una regla de concentración. La regla **no se incorporó** al detector principal.
 
-| Evaluación | Operaciones evaluadas | Anomalías conocidas | Detectadas | Falsas alertas | Precision | Recall | F1-score |
+| Evaluación | Operaciones evaluadas | Anomalías conocidas | Detectadas | Falsas alertas | Precisión | Recall | F1-score |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Inicial (1.200/300) | 300 | 3 | 3 | 25 | 10,71 % | 100 % | 19,35 % |
 | Tres ventanas progresivas | 900 | 20 | 14 | 120 | 10,45 % | 70 % | 18,18 % |
@@ -57,7 +57,7 @@ La evaluación inicial coincide con la tercera ventana y **no se contabiliza dos
 
 El proyecto avanzó desde la construcción de datos de prueba hasta el análisis de los errores del modelo:
 
-1. **Datos sintéticos:** se generaron 1.500 transacciones de 30 cuentas, con comportamientos habituales y 30 anomalías conocidas de importe, horario y concentración. Las etiquetas se guardaron por separado para evaluar las predicciones.
+1. **Datos sintéticos:** se generaron 1.500 transacciones de 30 cuentas, con comportamientos habituales y 30 anomalías conocidas de importe, horario y concentración. Las etiquetas se conservaron por separado para evaluar las predicciones.
 2. **Almacenamiento y preparación:** los movimientos se guardaron en CSV y PostgreSQL. Con Python se construyeron las tres características que recibe Isolation Forest: `monto_relativo`, `rareza_horaria` y `movimientos_5min`.
 3. **Primer entrenamiento:** se entrenó Isolation Forest sin etiquetas y se evaluó sobre las últimas 300 operaciones, posteriores al período de entrenamiento.
 4. **Aplicación Streamlit:** se creó un dashboard para explorar las alertas y sus métricas. Puede ejecutarse con PostgreSQL o directamente con los CSV; también hay una [versión online](https://financial-anomaly-detector-5wzvcxhptf9mubphaiabrg.streamlit.app/).
@@ -226,461 +226,111 @@ Una ejecución correcta termina con código de salida `0`; un error termina con
 que PostgreSQL esté encendido, las cinco variables locales, el puerto y los
 permisos del usuario sobre la base, el esquema y la tabla.
 
-## Etapa 4A: preparación y características
+## Etapa 4A: preparación de los datos
 
-La ingeniería de características transforma datos originales en medidas útiles
-para un modelo. Estas tres variables representan un importe inusual, un horario
-poco frecuente y una concentración de operaciones de la misma cuenta. Un valor
-alto indica mayor intensidad de ese comportamiento; por sí solo no demuestra
-fraude ni determina que una transacción sea anómala.
+### ¿Qué información recibe el modelo?
 
-`validar_y_convertir(df)` devuelve una copia de las ocho columnas originales,
-convierte `monto` de `Decimal` a `float64` y comprueba que `fecha_hora` sea
-datetime. Rechaza identificadores duplicados, datos faltantes e importes no
-positivos o no finitos. No usa el índice como identificador ni elimina filas.
-La conversión a punto flotante permite el procesamiento numérico, aunque pierde
-la representación decimal exacta usada para almacenar dinero.
+Las transacciones originales describen montos, fechas, cuentas y otras características de cada operación. Para identificar comportamientos poco habituales, se construyeron **tres variables** que permiten comparar cada movimiento con la actividad anterior de su cuenta.
 
-El procesamiento distingue dos pasos: `ajustar_referencias(referencia)` estima
-las medianas y distribuciones horarias y devuelve un objeto `Referencias`;
-`transformar_datos(transacciones, referencias, historial=None)` aplica esos
-valores fijos, sin volver a ajustarlos. Devuelve las ocho columnas originales y
-las tres nuevas, conservando el orden, los identificadores y el índice de entrada,
-incluso si ese índice tiene valores repetidos.
+| Característica | ¿Qué representa? | Ejemplo de interpretación |
+| --- | --- | --- |
+| `monto_relativo` | Relación entre el importe y la mediana de la cuenta | Un valor de 3 indica un importe tres veces mayor que la mediana utilizada como referencia |
+| `rareza_horaria` | Qué tan poco frecuente es la hora de una operación | Las horas con menos antecedentes obtienen valores más altos |
+| `movimientos_5min` | Cantidad de movimientos de la misma cuenta en una ventana de cinco minutos | Permite observar operaciones cercanas en el tiempo |
 
-- **`monto_relativo`**: divide el importe por la mediana de su cuenta en la
-  referencia. Un resultado de `1` equivale a esa mediana; `3` significa tres
-  veces ese importe. La mediana reduce la influencia de extremos frente al
-  promedio, pero las anomalías de la referencia también pueden afectarla.
-  Cuentas con menos de cinco observaciones y cuentas nuevas usan la mediana
-  global de la referencia. El mínimo se configura con `min_observaciones` al
-  ajustar. Una referencia vacía se rechaza.
-- **`rareza_horaria`**: agrupa las horas en 24 intervalos (`0` a `23`). Para cada
-  cuenta, si `c_h` es la cantidad de operaciones en la hora `h`, suaviza los
-  conteos con `s_h = 0.25*c_(h-1) + 0.5*c_h + 0.25*c_(h+1)`. Las horas son
-  circulares: `23` y `0` son vecinas. Luego aplica
-  `p_h = (s_h + 1) / (n + 24)`, donde `n` es la cantidad de operaciones de
-  referencia de esa cuenta, y calcula `rareza_horaria = -ln(p_h)`. Las
-  probabilidades suman `1` y nunca son cero. Una hora más frecuente tiene menor
-  rareza; una menos frecuente tiene mayor rareza. Cuentas con pocas observaciones
-  o nuevas usan la distribución global calculada del mismo modo.
-- **`movimientos_5min`**: cuenta operaciones de la misma cuenta en el intervalo
-  inclusivo `[t - 5 minutos, t]`, incluida la actual. Ordena por cuenta, fecha
-  y `transaccion_id` en orden lexicográfico. Para operaciones simultáneas cuenta
-  la actual y los identificadores anteriores, sin anticipar los posteriores.
-  `calcular_movimientos_5min(transacciones, historial=None)` también permite
-  obtener este conteo por separado; su resultado es `int64`.
+Para la rareza horaria se utilizan **24 franjas de una hora**, con un suavizado que tiene en cuenta las horas vecinas y evita asignar probabilidades nulas a horarios sin registros. En el conteo de cinco minutos se consideran únicamente las operaciones disponibles hasta el momento de cada transacción: **no se utilizan movimientos futuros**.
 
-El suavizado horario reparte información entre horas vecinas y agrega una
-observación por hora (Laplace), evitando asignar probabilidad cero a horarios
-sin antecedentes. Sus 24 observaciones adicionales tienen bastante peso con
-cuentas pequeñas. El cálculo ignora los minutos dentro de cada hora, y el
-respaldo global mezcla perfiles personales y comerciales. Las distintas
-cantidades de observaciones por cuenta también afectan la estimación; estas
-probabilidades describen horarios, **no son probabilidades de fraude**.
+Las referencias de montos y horarios se calculan con el conjunto de entrenamiento y después se aplican sin reajustarse al período de evaluación. Esta separación es importante para no incorporar información del futuro al análisis.
 
-El historial para los cinco minutos se pasa explícitamente: ajustar referencias
-no lo guarda ni lo incorpora automáticamente al conteo. Para cada objetivo solo
-se consideran movimientos anteriores según el orden indicado; registros futuros
-del historial no influyen en objetivos pasados. Un ID presente tanto en historial
-como en objetivos se cuenta una sola vez si sus datos originales coinciden; si
-hay diferencias, se rechaza para evitar resultados ambiguos. Para procesar lotes
-nuevos, pasar el historial observado junto con las transacciones del lote. Las
-referencias permanecen fijas hasta un nuevo ajuste explícito.
+Ninguna de las tres variables demuestra por sí sola que una transacción sea fraudulenta o anómala. Su función es describir comportamientos que el modelo analizará conjuntamente.
 
-Antes de evaluar un modelo hay que separar cronológicamente las transacciones:
-ajustar referencias con el período anterior y transformar el período futuro,
-aportando el historial disponible para los conteos. Por ejemplo, con esos dos
-DataFrames ya separados:
+### Cómo reproducir la preparación
 
-```python
-from src.preparar_datos import ajustar_referencias, transformar_datos
-
-referencias = ajustar_referencias(transacciones_anteriores)
-preparadas = transformar_datos(
-    transacciones_nuevas, referencias, historial=transacciones_anteriores
-)
-```
-
-Para ejecutar la demostración con PostgreSQL desde la raíz:
+El siguiente comando permite revisar las características desde la consola con PostgreSQL local configurado:
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.preparar_datos
 ```
 
-También se admite `.\.venv\Scripts\python.exe src\preparar_datos.py`. Reutiliza
-`crear_engine` y `cargar_transacciones` de los módulos existentes y la misma
-configuración local de solo lectura. Muestra filas procesadas, cuentas distintas,
-las primeras cinco filas, tipos y estadísticas descriptivas de las tres variables,
-y comprueba la ausencia de nulos e infinitos. El DataFrame resultante tiene once
-columnas. No guarda CSV ni modifica PostgreSQL.
+Este procedimiento explora las características de los datos; **no constituye por sí mismo una evaluación del modelo**. La implementación se encuentra en `src/preparar_datos.py`. Las fórmulas de suavizado, validaciones, casos de cuentas nuevas y ejemplos de uso están en el [detalle técnico de la etapa 4A](docs/detalle_implementacion.md#etapa-4a-preparación-y-características).
 
-La demostración ajusta y transforma los mismos 1500 movimientos únicamente para
-explorar las características: **no constituye una evaluación válida**. No lee
-etiquetas ni usa los horarios o reglas del generador como patrones predefinidos.
-Este comando no entrena un modelo ni aplica umbrales; la etapa 4B lo hace por separado.
+## Etapa 4B: entrenamiento y primera evaluación
 
-Las pruebas de `tests/test_preparar_datos.py` usan pequeños ejemplos ficticios sin
-PostgreSQL ni etiquetas reales. Cubren validación, medianas, distribución horaria,
-medianoche, cuentas con pocos datos, conteos causales, empates, historial y la
-separación entre ajuste y transformación. Ejecutar la suite desde la raíz:
+### ¿Cómo identifica las operaciones inusuales Isolation Forest?
 
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
+**Isolation Forest** es un algoritmo de aprendizaje no supervisado que intenta aislar observaciones mediante divisiones aleatorias de sus características. Una operación que se separa del resto con pocos cortes suele recibir un puntaje de anomalía más alto.
 
-## Etapa 4B: Isolation Forest y evaluación
+El modelo se entrenó con las tres características construidas en la etapa anterior, **sin utilizar las etiquetas de anomalía**. Para realizar la primera evaluación se respetó el orden temporal de los datos:
 
-Isolation Forest separa observaciones mediante cortes aleatorios en sus variables.
-Una operación que se aísla con pocos cortes resulta más inusual para el modelo.
-Se entrena sin etiquetas usando solo `monto_relativo`, `rareza_horaria` y
-`movimientos_5min`, reutilizadas de 4A, sin escalador adicional. Los identificadores,
-las fechas y los demás campos originales se conservan para revisar resultados,
-pero no son entradas del modelo.
+- **Entrenamiento:** las primeras 1.200 transacciones sintéticas.
+- **Evaluación:** las 300 transacciones posteriores.
+- **Configuración:** 200 árboles, `contamination="auto"`, `random_state=42` y un umbral de alerta de 0,5 sobre el puntaje `-score_samples`.
 
-`separar_cronologicamente(df, fraccion_entrenamiento=0.8)` ordena por
-`fecha_hora` y `transaccion_id`: usa el primer 80 % para entrenamiento y el resto
-para evaluación. Si el corte divide operaciones con la misma fecha y hora, todo
-ese grupo pasa a evaluación; por eso la proporción es aproximada. Rechaza cortes
-que dejan un conjunto vacío. No distribuye las anomalías entre conjuntos usando
-sus etiquetas.
+El puntaje indica qué tan inusual resulta una operación para el modelo; **no representa una probabilidad de fraude**. Las etiquetas conocidas se consultan después de generar las predicciones, exclusivamente para medir los resultados.
 
-`entrenar_y_predecir(transacciones)` realiza la separación, ajusta las referencias
-exclusivamente con entrenamiento y transforma ambos conjuntos con esas referencias
-fijas. Para los cinco minutos, entrenamiento usa su propio lote; evaluación agrega
-el historial de entrenamiento y las operaciones previas de su mismo lote,
-respetando el orden causal de 4A. Ninguna operación futura entra en un conteo.
-Las anomalías que pueda contener entrenamiento no se eliminan con etiquetas.
+### ¿Qué se obtuvo?
 
-La configuración se fija antes de consultar las etiquetas:
+| Indicador | Primera evaluación |
+| --- | ---: |
+| Transacciones evaluadas | 300 |
+| Anomalías conocidas presentes | 3 |
+| Anomalías detectadas | 3 |
+| Falsas alertas | 25 |
+| Precisión | 10,71 % |
+| Recall | 100 % |
+| F1-score | 19,35 % |
 
-```python
-IsolationForest(
-    n_estimators=200, max_samples="auto", contamination="auto",
-    max_features=1.0, bootstrap=False, random_state=42, n_jobs=1,
-)
-```
+El modelo identificó las tres anomalías conocidas de ese período, pero **25 de sus 28 alertas correspondieron a movimientos etiquetados como habituales**. Además, en esta evaluación no había anomalías de concentración, por lo que no era posible medir su detección.
 
-Son 200 árboles; cada uno usa hasta `min(256, n_entrenamiento)` observaciones y
-las tres variables. La semilla permite reproducir el entrenamiento. No se ajustan
-parámetros mirando los resultados de evaluación.
+El recall del 100 % debe interpretarse con cautela: se basa en **solo tres casos conocidos**. Precisamente por esa limitación se amplió después la evaluación a tres ventanas temporales, como se explica en la etapa 6.
 
-El puntaje es `puntaje_anomalia = -modelo.score_samples(caracteristicas)`:
-cuanto mayor, más inusual considera el modelo una operación. Con
-`contamination="auto"`, el criterio es `prediccion_anomalia = 1` si el puntaje
-es estrictamente mayor que `0.5`; en igualdad, es `0`. El puntaje no es una
-probabilidad de fraude y la configuración no obliga a detectar un 2 % de casos.
-El umbral determina las alertas; no usa el porcentaje conocido de anomalías
-sintéticas. El signo del puntaje y el umbral se corresponden con la
-[documentación de IsolationForest](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html).
+### Cómo reproducir el entrenamiento
 
-La función devuelve `ResultadoEntrenamiento`, que contiene el modelo, las
-referencias, el entrenamiento preparado con once columnas y las predicciones
-del período de evaluación con esas once columnas más `puntaje_anomalia` y
-`prediccion_anomalia`. No guarda el modelo ni los resultados en archivos.
-
-Para ejecutar desde la raíz, con PostgreSQL disponible y la configuración local
-de la etapa 3:
+Con PostgreSQL local configurado:
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.entrenar_modelo
 ```
 
-También se admite `.\.venv\Scripts\python.exe src\entrenar_modelo.py`. El comando
-reutiliza la lectura protegida de PostgreSQL y cierra sus recursos antes de
-entrenar. Genera todas las predicciones y recién entonces lee
-`data/etiquetas_evaluacion.csv` con `cargar_etiquetas`. Valida identificadores
-únicos y su correspondencia con todos los movimientos recuperados, y vincula
-las etiquetas con las predicciones uno a uno mediante `transaccion_id`.
-Las métricas se calculan únicamente sobre evaluación; las etiquetas no ajustan
-referencias, modelo ni umbral. No modifica PostgreSQL, los CSV ni el generador.
+El módulo está en `src/entrenar_modelo.py`. Los parámetros completos, la definición de las métricas, las matrices de confusión y los controles metodológicos se conservan en el [detalle técnico de la etapa 4B](docs/detalle_implementacion.md#etapa-4b-isolation-forest-y-evaluación).
 
-El informe muestra cantidades y períodos de ambos conjuntos, las cuentas distintas
-recuperadas, parámetros y umbral, anomalías conocidas y alertas, y los diez puntajes más altos del período de
-evaluación con sus identificadores, fechas, cuentas, características y predicción.
-Para interpretar sus métricas:
+## Etapa 5: visualización interactiva con Streamlit
 
-- **Verdaderos positivos (TP)**: anomalías conocidas que recibieron alerta.
-- **Falsos positivos (FP)**: movimientos normales que recibieron alerta y
-  requerirían una revisión innecesaria.
-- **Falsos negativos (FN)**: anomalías conocidas que el modelo omitió.
-- **Precisión**, `TP / (TP + FP)`: qué proporción de las alertas era anómala.
-- **Recall**, `TP / (TP + FN)`: qué proporción de las anomalías fue detectada.
-- **F1**: media armónica de precisión y recall; resume ambas medidas.
+### ¿Qué permite hacer la aplicación?
 
-La matriz de confusión tiene filas reales `[normal, anomalía]` y columnas
-predichas `[normal, anomalía]`, es decir, `[[TN, FP], [FN, TP]]`; `TN` son los
-movimientos normales correctamente descartados. Si una métrica global tiene
-denominador cero, se informa `0` (`zero_division=0`) y debe leerse junto con las
-cantidades de casos.
+Se desarrolló un dashboard para explorar las transacciones evaluadas y observar cuáles fueron señaladas por Isolation Forest. Incluye indicadores generales, filtros por cuenta, período y resultado, una tabla de operaciones y un gráfico de alertas frente a movimientos sin alerta.
 
-Para cada tipo de anomalía incorporada al conjunto sintético (`importe_inusual`,
-`horario_atipico` y `concentracion`), se informa cuántas operaciones estaban
-presentes en los datos de evaluación, cuántas fueron detectadas, cuántas
-quedaron sin identificar y el recall correspondiente.
+También permite consultar las tres características técnicas y sus puntajes para comprender **qué información recibió el modelo**. Estas medidas describen las operaciones, pero no explican de forma causal por qué se generó cada alerta.
 
-Isolation Forest no identifica el tipo de anomalía: únicamente señala operaciones
-como potencialmente anómalas. La comparación por tipos se realiza después,
-utilizando las etiquetas conocidas para analizar los resultados.
+Los filtros modifican las operaciones visibles y sus contadores, mientras que las métricas generales permanecen referidas al conjunto de evaluación completo. Las etiquetas sintéticas conocidas sirven para calcular esas métricas; **no se utilizan durante el entrenamiento**.
 
-Si un tipo de anomalía no aparece en el período evaluado, su recall se informa
-como **N/D**, ya que no hay casos de ese tipo para calcularlo.
+### Cómo acceder
 
-Los resultados describen un único corte temporal de datos sintéticos. Puede haber
-muy pocos casos por tipo o tipos ausentes, y las anomalías presentes en
-entrenamiento pueden influir en las referencias y en el detector. Un buen
-resultado aquí no garantiza el mismo rendimiento en transacciones reales.
-Cambiar características, parámetros o umbral a partir de este informe requerirá
-otro conjunto de validación independiente; no debe usarse repetidamente este
-período como si siguiera siendo una prueba nueva.
-
-La primera ejecución real, verificada el 8 de noviembre de 2026 con Scikit-learn
-1.9.1, recuperó 1500 movimientos de 30 cuentas: 1200 para entrenamiento, hasta
-el 13 de marzo a las 09:25:21, y 300 para evaluación, desde el 13 de marzo a las
-09:30:51 hasta el 31 de marzo de 2026. Produjo 28 alertas: 3 verdaderos positivos
-y 25 falsos positivos, sin falsos negativos. La precisión fue 0.107143, el recall
-1.000000 y F1 0.193548; la matriz fue `[[272, 25], [0, 3]]`.
-
-En evaluación quedaron dos anomalías de importe y una de horario, todas
-detectadas, y ninguna de concentración. Por tanto, este corte no permite medir
-la detección de concentraciones. El recall del 100 % se apoya en solo tres casos
-y convive con baja precisión: 25 de las 28 alertas fueron falsas. Estos resultados
-no se utilizaron para cambiar los parámetros ni el umbral. Son un registro de
-esa ejecución; el comando calcula las métricas con los datos disponibles.
-
-Las pruebas de `tests/test_entrenar_modelo.py` usan ejemplos ficticios sin
-PostgreSQL ni etiquetas reales. Para ejecutar toda la suite tratando las
-advertencias como errores:
-
-```powershell
-.\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
-```
-
-## Etapa 5: aplicación Streamlit con CSV o PostgreSQL
-
-Para **probar la aplicación**, se recomienda el modo CSV explicado al principio del README; no es necesario configurar PostgreSQL. La segunda alternativa conserva la conexión de solo lectura utilizada durante el desarrollo.
-
-
-Ejecutar desde la raíz del proyecto, en PowerShell. El diseño y el pipeline son
-los mismos en ambos modos; `DATA_SOURCE` selecciona explícitamente la fuente.
-
-**Modo demostración CSV**, sin servidor PostgreSQL, credenciales ni archivo `.env`:
+La versión publicada está disponible en **[Financial Anomaly Detector — Streamlit](https://financial-anomaly-detector-5wzvcxhptf9mubphaiabrg.streamlit.app/)**. Para ejecutarla en una computadora propia, se recomienda el modo CSV, que utiliza los archivos del repositorio y no requiere PostgreSQL:
 
 ```powershell
 $env:DATA_SOURCE = "csv"
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-**Modo PostgreSQL**, con el servicio activo y la configuración local de la etapa 3:
+Una vez iniciado el servidor, abrir [http://localhost:8501](http://localhost:8501) en esa misma computadora. Para detenerlo, presionar **Ctrl+C** en la terminal. Este comando presupone que Python y las dependencias ya se instalaron, como se explica al inicio del README.
+
+La aplicación también admite PostgreSQL local como fuente de datos:
 
 ```powershell
 $env:DATA_SOURCE = "postgres"
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-PostgreSQL sigue siendo el valor predeterminado. La variable del proceso tiene
-prioridad sobre `DATA_SOURCE` en el `.env` opcional de la raíz. Si no se define en
-ninguno, se utiliza `postgres`. Solo se aceptan los valores exactos `postgres` y
-`csv`; un valor inválido o un `.env` con errores de sintaxis muestra un error sin
-reproducir su contenido.
-Para volver al valor del archivo o al predeterminado en esta terminal:
+En ambos casos se utiliza el mismo procedimiento de preparación, entrenamiento y evaluación. Con los archivos sintéticos incluidos, se verificó que ambas fuentes produjeran **las mismas 28 alertas y las mismas métricas de evaluación**.
 
-```powershell
-Remove-Item Env:DATA_SOURCE -ErrorAction SilentlyContinue
-```
+**Importante:** el código conserva PostgreSQL como fuente predeterminada cuando no se especifica `DATA_SOURCE`. La demostración online y el comando local anterior seleccionan CSV expresamente.
 
-Detener y volver a iniciar Streamlit para cambiar la configuración. Seleccionar
-`csv` en PowerShell omite por completo la lectura de `.env` y la creación de
-motores/conexiones a PostgreSQL. No existe un cambio automático de fuente ante
-errores: PostgreSQL indisponible continúa mostrando su error de conexión.
-`DATA_SOURCE` controla el dashboard; los comandos de las etapas anteriores
-conservan su funcionamiento original con PostgreSQL.
+### Verificación y publicación
 
-Una vez iniciado Streamlit, la aplicación puede abrirse desde el navegador en
-[http://localhost:8501](http://localhost:8501). Esta dirección corresponde a una
-ejecución local, por lo que solo estará disponible en la computadora donde se
-haya iniciado el servidor.
+Se realizaron pruebas automatizadas de lectura de datos, métricas, filtros y actualización de resultados. Los CSV permiten utilizar la demostración sin compartir contraseñas ni configurar una base de datos. La aplicación publicada utiliza transacciones sintéticas y **no se conecta con servicios bancarios reales**.
 
-Para detener la aplicación, presionar **Ctrl+C** en la terminal.
-
-El dashboard **Financial Anomaly Detector** muestra un resumen de los movimientos
-recuperados, cuentas y tamaños de entrenamiento y evaluación. Todas las cifras
-se calculan con los datos cargados. Sus seis indicadores globales corresponden
-al conjunto completo de evaluación: transacciones, alertas, «Anomalías reales»
-(etiquetas sintéticas conocidas), precisión, recall y F1. Se distribuyen en una grilla de hasta tres columnas que
-se adapta al ancho disponible, manteniendo visibles los títulos y porcentajes.
-También advierte sobre la cantidad de anomalías conocidas, los
-falsos positivos y los tipos sin ejemplos de evaluación; el significado y las
-limitaciones de estas métricas son los de la etapa 4B.
-
-Los filtros permiten elegir cuenta, fechas y resultado: **Todas**, **Alertas** o
-**Normales**. Las fechas incluyen los días seleccionados completos; «Normales»
-significa sin alerta del modelo. La vista muestra sus propios contadores, una
-tabla de transacciones de evaluación con identificadores, estado destacado,
-características y puntaje, y un gráfico de barras de alertas frente a normales.
-La tabla prioriza transacción, cuenta, fecha y hora, importe en ARS, resultado y
-puntaje. El interruptor **Mostrar características técnicas** agrega las tres
-variables al final, sin cambiar filas, predicciones ni métricas. Los importes
-muestran separadores de miles y dos decimales; los puntajes, cuatro decimales.
-La sección **Cómo leer las características** explica su significado y aclara que
-describen los movimientos, sin ofrecer una explicación causal de cada alerta.
-Los filtros afectan esa tabla, sus contadores y el gráfico; los seis indicadores
-globales permanecen referidos a toda la evaluación. Las etiquetas conocidas solo
-intervienen en las métricas históricas: no se usan para filtrar, entrenar ni
-mostrar la tabla operativa.
-
-Al cargar por primera vez, `cargar_resultados(fuente)` consulta PostgreSQL en modo
-de solo lectura y cierra sus recursos, o lee `data/transacciones.csv` con Pandas.
-El lector CSV reutiliza `validar_y_convertir`: exige las ocho columnas originales,
-identificadores únicos y no vacíos, campos obligatorios completos, importes
-positivos y finitos y fechas válidas sin zona horaria. Conserva los identificadores
-como texto y convierte los importes y fechas con las validaciones compartidas.
-Las rutas del CSV, las etiquetas y el `.env` opcional se basan en la ubicación del
-proyecto, no en el directorio actual de la terminal. Si se inicia desde otra
-carpeta, pasar las rutas completas del intérprete y de `app.py` al comando.
-
-En ambos modos se ejecutan las mismas funciones `pipeline.entrenar_y_predecir()`
-y `pipeline.evaluar_predicciones()`. Se conservan la separación cronológica 80/20,
-las referencias ajustadas con entrenamiento, las tres características, el cálculo
-causal de frecuencia, los 200 árboles, `contamination="auto"`, `random_state=42`
-y el umbral original. Solo después de generar las predicciones se leen las
-etiquetas separadas para evaluar; nunca se incorporan al entrenamiento.
-La fuente aparece en el resumen y en la indicación existente de la barra lateral.
-
-La caché distingue la fuente mediante un argumento explícito y conserva una
-única entrada con resultados en memoria
-mediante `st.cache_data(max_entries=1)`, sin vencimiento automático. La caché es
-compartida por las sesiones del mismo servidor y cada ejecución recibe una copia;
-no conserva el modelo ni conexiones a la base y no persiste resultados en disco.
-Cambiar filtros reutiliza esos resultados, sin reajustar referencias ni reentrenar.
-
-El botón **Actualizar resultados** invalida esa caché, vuelve a consultar los
-datos y repite el entrenamiento y la evaluación. Usarlo cuando cambien los datos
-de la fuente seleccionada o las etiquetas. Reiniciar el servidor también borra la caché;
-si cambia `.env`, reiniciar el proceso para aplicar la configuración de conexión
-de la etapa 3.
-
-La aplicación es local y no publica el proyecto ni modifica PostgreSQL o los
-CSV. Las pruebas de `tests/test_app.py` usan `AppTest` de Streamlit con datos
-ficticios y el CSV real, bloqueando los accesos a PostgreSQL. Cubren las métricas
-calculadas, separación de etiquetas, caché por fuente, filtros, actualización,
-ausencia de respaldo automático y errores sin detalles sensibles. Las de
-`tests/test_fuentes_datos.py` cubren configuración y validación de la lectura CSV.
-Para ejecutar toda la suite secuencialmente:
-
-```powershell
-.\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
-```
-
-La verificación local tras la mejora visual aprobó **77 pruebas**: las 67 anteriores y
-10 de la aplicación. También se comprobó la interfaz con PostgreSQL real: mostró
-300 transacciones de evaluación y, al filtrar, conservó los puntajes y las seis
-métricas globales con una sola lectura y un solo entrenamiento. El servidor
-local inició correctamente y respondió con HTTP 200; se detuvo al terminar la
-prueba. Estas comprobaciones no requieren abrir otro navegador durante la suite.
-
-### Verificación del modo demostración CSV
-
-Pasaron **133 pruebas** con `-W error`: las 116 existentes y 17 adicionales.
-Se ejecutaron secuencialmente. La prueba del CSV real conserva las variables de
-Windows necesarias para Streamlit, elimina las cinco variables `DB_*`, bloquea
-la lectura de `.env` y los accesos a PostgreSQL, y comprueba las métricas, los
-300 movimientos y la caché al filtrar. También se leyó el CSV desde otro directorio.
-Los casos de configuración y datos mal formados se prueban con archivos temporales.
-
-Se compararon las fuentes usando la conexión de solo lectura existente: ambas
-contenían las mismas 1500 transacciones y 30 cuentas. Las predicciones y los
-puntajes resultaron idénticos, calculados mediante el pipeline original:
-
-| Fuente | Entrenamiento | Evaluación | Alertas | Precisión | Recall | F1-score |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 1200 | 300 | 28 | 10,71 % | 100,00 % | 19,35 % |
-| PostgreSQL | 1200 | 300 | 28 | 10,71 % | 100,00 % | 19,35 % |
-
-En ambos casos: TN=272, FP=25, FN=0 y TP=3; matriz de confusión `[[272,25],[0,3]]`
-(filas: clase real normal/anómala; columnas: predicción normal/alerta).
-Estos valores documentan esta ejecución; la interfaz sigue calculándolos con los
-datos cargados. No se agregaron dependencias ni se modificaron los CSV, el tema,
-la conexión, el entrenamiento ni los experimentos anteriores.
-
-También se inició el servidor Streamlit real en modo CSV sin las cinco variables
-de conexión. Respondió HTTP 200 y la comprobación de la aplicación mediante su
-API local mostró los 300 movimientos, las 28 alertas, los filtros y el detalle
-técnico. Las métricas y el momento de carga se conservaron al filtrar; actualizar
-resultados volvió a mostrar los 300 movimientos y restableció los filtros.
-La API se habilitó solo mediante una opción temporal de arranque para esta
-verificación; no se agregó a la configuración del proyecto.
-
-### Aplicación publicada en Streamlit Community Cloud
-
-Enlace público de la demostración: **[Financial Anomaly Detector](https://financial-anomaly-detector-5wzvcxhptf9mubphaiabrg.streamlit.app/)**.
-
-Esta sección conserva las decisiones técnicas de preparación del despliegue y las instrucciones para reproducirlo o actualizarlo. La dirección pública es distinta de `http://localhost:8501`, que solo funciona al ejecutar la aplicación localmente.
-
-La revisión de despliegue quitó únicamente `[server] address = "127.0.0.1"` de
-`.streamlit/config.toml`, para que la plataforma gestione la dirección y el puerto.
-La paleta, tipografías, espacios, bordes y estilos del tema se conservaron íntegros.
-No se fijó un puerto ni se habilitó la API de pruebas. Tampoco se añadieron cambios
-de CORS/XSRF. `browser.gatherUsageStats = false` se mantiene en el archivo local;
-Community Cloud puede sobrescribir esta y otras opciones según su
-[configuración de plataforma](https://docs.streamlit.io/deploy/streamlit-community-cloud/status).
-
-`requirements.txt` fija las siete dependencias directas a las versiones instaladas
-y probadas, sin agregar paquetes ni actualizar el entorno: Streamlit 1.67.0,
-Pandas 3.1.1, NumPy 2.5.4, Scikit-learn 1.9.1, SQLAlchemy 2.1.8,
-psycopg[binary] 3.3.8 y python-dotenv 1.2.4. Así se conservan las APIs del diseño
-aprobado y las versiones principales del entorno científico. SQLAlchemy, Psycopg y
-dotenv se mantienen porque los módulos compartidos los importan incluso en modo
-CSV; no se crean conexiones al seleccionarlo. Las dependencias transitivas no
-constituyen un bloqueo completo del entorno y pueden variar al resolverlo.
-
-Seleccionar **Python 3.14** en Cloud para coincidir con la versión menor probada
-localmente (3.14.10). Todas estas dependencias admiten esa versión; se verificaron
-en PyPI distribuciones Linux/CPython 3.14 para las dependencias binarias principales.
-Community Cloud admite versiones publicadas de Python con soporte de seguridad y
-permite elegirlas en [Advanced settings](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy).
-No depender de la versión predeterminada de la plataforma ni usar `runtime.txt`
-como sustituto de esa selección. El parche concreto de Python lo gestiona Cloud.
-
-Guía para reproducir o actualizar el despliegue:
-
-1. Guardar y sincronizar los cambios con GitHub; Streamlit Community Cloud usa el contenido remoto y no el de VS Code.
-2. Para un nuevo despliegue, elegir el repositorio, la rama que contenga la versión deseada y **Main file path: `app.py`**. En **Advanced settings**, seleccionar Python 3.14. Para actualizar la aplicación existente, comprobar primero qué rama tiene configurada en Community Cloud.
-3. En **Secrets**, pegar únicamente esta configuración TOML, en la raíz, sin una
-   sección `[database]` o `[DATA_SOURCE]`:
-
-   ```toml
-   DATA_SOURCE = "csv"
-   ```
-
-4. No configurar `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` ni `DB_PASSWORD` para
-   el demo. El valor raíz se expone como variable de entorno antes de ejecutar la
-   aplicación, según la [documentación de Secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management).
-   Sin esa selección explícita, el proyecto sigue usando PostgreSQL por defecto;
-   no hay respaldo automático hacia CSV.
-5. Tras un despliegue o actualización, revisar los logs de instalación y comprobar
-   300 movimientos evaluados, 28 alertas y las métricas documentadas arriba, además
-   de filtros y actualización. Las pruebas locales no sustituyen una verificación de la aplicación en Community Cloud.
-
-Los archivos necesarios están versionados: `app.py`, los módulos de `src/`,
-`.streamlit/config.toml`, `requirements.txt`, `data/transacciones.csv` y
-`data/etiquetas_evaluacion.csv`. El modelo se entrena al cargar, sin requerir un
-archivo de modelo local. El demo no depende de `.venv`, `.env`, un servidor
-PostgreSQL ni credenciales. Las etiquetas continúan leyéndose después de predecir.
-
-### Verificación y consideraciones de seguridad
-
-Durante el desarrollo se realizaron pruebas automatizadas para comprobar la
-preparación de los datos, el entrenamiento, la evaluación del modelo y el
-funcionamiento de la aplicación.
-
-La versión publicada utiliza los archivos sintéticos del repositorio y no
-requiere acceso a una base de datos bancaria ni credenciales de PostgreSQL.
-Los archivos de configuración local que pueden contener información sensible,
-como `.env`, están excluidos del control de versiones.
-
-Estas verificaciones contribuyen a la reproducibilidad del proyecto, aunque
-no sustituyen la comprobación de su funcionamiento en el entorno de despliegue.
+La configuración detallada de las dos fuentes, el funcionamiento de la caché, las comprobaciones y las instrucciones para reproducir o actualizar el despliegue se encuentran en el [detalle técnico de la etapa 5](docs/detalle_implementacion.md#etapa-5-aplicación-streamlit-con-csv-o-postgresql).
 
 ## Etapa 6: evaluación temporal progresiva
 
@@ -699,7 +349,7 @@ Por eso se realizó una **evaluación temporal progresiva**: en cada prueba se e
 
 La tercera ventana corresponde al mismo corte que el primer experimento de 1.200/300: **no se cuenta dos veces**.
 
-En conjunto, el modelo identificó 14 de las 20 anomalías conocidas (**recall del 70 %**), pero la mayoría de las alertas correspondió a movimientos etiquetados como habituales (**precision del 10,45 %** y **F1 del 18,18 %**).
+En conjunto, el modelo identificó 14 de las 20 anomalías conocidas (**recall del 70 %**), pero la mayoría de las alertas correspondió a movimientos etiquetados como habituales (**precisión del 10,45 %** y **F1 del 18,18 %**).
 
 La cantidad de información anterior aumentó en cada entrenamiento, pero **también cambiaron las transacciones evaluadas**. Por eso no podemos atribuir las diferencias de resultados únicamente al tamaño del entrenamiento.
 
@@ -798,7 +448,7 @@ Para regenerar el dataset sintético o ejecutar las pruebas automatizadas desde 
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-**Atención:** volver a ejecutar el generador sobrescribe los archivos de transacciones, etiquetas y diccionario de datos en `data/`. Si solo querés explorar la aplicación, no necesitás regenerarlos: los CSV ya están incluidos.
+**Importante:** volver a ejecutar el generador sobrescribe los archivos de transacciones, etiquetas y diccionario de datos en `data/`. Para explorar la aplicación no es necesario regenerarlos: los CSV ya están incluidos.
 
 Las pruebas utilizan `unittest` para comprobar la generación de datos, las características, el entrenamiento, las métricas, el dashboard y los experimentos. Pueden ejecutarse sin disponer de una base PostgreSQL local. El detalle de las verificaciones de cada etapa se conserva en [`docs/detalle_experimentos.md`](docs/detalle_experimentos.md).
 
