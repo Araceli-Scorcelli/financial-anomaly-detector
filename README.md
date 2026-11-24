@@ -12,6 +12,32 @@ La demostración interactiva está publicada mediante Streamlit Community Cloud:
 
 La aplicación permite explorar el análisis de transacciones sintéticas. No se conecta con bancos reales ni confirma fraudes. Quien prefiera ejecutar una copia en su computadora puede utilizar el modo CSV descrito más abajo, sin disponer de PostgreSQL.
 
+## Ejecutar la aplicación localmente con CSV
+
+Con Python instalado, desde la carpeta raíz del repositorio (PowerShell en Windows):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:DATA_SOURCE = "csv"
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+El modo `csv` utiliza los archivos sintéticos incluidos en `data/`: no requiere instalar PostgreSQL ni configurar credenciales. Es la alternativa más sencilla para probar el dashboard en una computadora propia. Una vez iniciado Streamlit, abrir [http://localhost:8501](http://localhost:8501) en esa misma computadora.
+
+**Importante:** el código conserva `postgres` como fuente predeterminada cuando no se define `DATA_SOURCE`. Por eso, para usar los CSV localmente es necesario establecer `DATA_SOURCE=csv` como indica el comando anterior.
+
+### ¿Cuándo se necesita PostgreSQL?
+
+| Uso | Fuente de datos | ¿Requiere PostgreSQL local? |
+| --- | --- | --- |
+| Abrir la [aplicación online](https://financial-anomaly-detector-5wzvcxhptf9mubphaiabrg.streamlit.app/) | CSV sintéticos | No |
+| Ejecutar el dashboard en la computadora | CSV con `DATA_SOURCE=csv` | No |
+| Ejecutar el dashboard con una base de datos | PostgreSQL con `DATA_SOURCE=postgres` | Sí |
+| Repetir los entrenamientos y las evaluaciones desde los scripts de consola documentados | PostgreSQL | Sí |
+
+El uso de PostgreSQL se mantiene como parte del desarrollo original y de la reproducción técnica de los experimentos, pero **no es un requisito para explorar la aplicación**, ni online ni con el modo CSV local. Las instrucciones de configuración y los comandos de los experimentos aparecen más adelante. Las pruebas automatizadas pueden ejecutarse con `python -m unittest discover -s tests -v`.
+
 ## Experiencia y resultados principales
 
 - **Datos:** 1.500 transacciones sintéticas de enero a marzo de 2026, distribuidas entre 30 cuentas. Se incorporaron 30 anomalías conocidas: 10 de importe, 10 de horario y 10 de concentración temporal.
@@ -26,19 +52,6 @@ La aplicación permite explorar el análisis de transacciones sintéticas. No se
 | Tres ventanas progresivas | 900 | 20 | 14 | 120 | 10,45 % | 70 % | 18,18 % |
 
 La evaluación inicial coincide con la tercera ventana y **no se contabiliza dos veces**. La regla experimental elevó las detecciones de 14 a 17 en las 900 operaciones históricas, pero en 180 escenarios sintéticos nuevos de abril de 2026 ambos enfoques obtuvieron los mismos resultados. Esto no demuestra desempeño en operaciones financieras reales.
-
-## Probar la aplicación sin PostgreSQL
-
-Con Python instalado, desde la carpeta raíz del repositorio (PowerShell en Windows):
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-$env:DATA_SOURCE = "csv"
-.\.venv\Scripts\python.exe -m streamlit run app.py
-```
-
-El modo `csv` permite explorar la demostración con los archivos sintéticos incluidos en `data/`, sin configurar una base local. Para usar PostgreSQL o reproducir los experimentos desde consola, consultá las instrucciones detalladas de las secciones siguientes. Las pruebas automatizadas se ejecutan con `python -m unittest discover -s tests -v`.
 
 ## Desarrollo del proyecto
 
@@ -75,10 +88,11 @@ La etapa 4B incorpora Isolation Forest y una evaluación sobre transacciones
 posteriores al entrenamiento. Las etiquetas se consultan después de generar las
 predicciones, únicamente para medir resultados.
 
-La etapa 5 agrega una aplicación local de Streamlit para explorar las predicciones
-y revisar las métricas históricas. Reutiliza las etapas anteriores y admite la
-lectura de PostgreSQL o un modo demostración CSV, sin modificar datos. Es una demostración académica con datos
-sintéticos; una alerta no confirma fraude. No se conecta con bancos reales.
+La etapa 5 incorpora una aplicación Streamlit para explorar las predicciones
+y revisar las métricas históricas, tanto en una ejecución local como en la
+versión publicada online. Reutiliza las etapas anteriores y admite la lectura
+de PostgreSQL o de los CSV sintéticos, sin modificar datos. Una alerta no
+confirma fraude y la aplicación no se conecta con bancos reales.
 
 La etapa 6 agrega una evaluación temporal complementaria con tres ventanas de
 entrenamiento creciente y bloques posteriores de evaluación sin solapamientos.
@@ -161,9 +175,12 @@ intérprete, desde la raíz:
 
 Pandas y NumPy se usan para generar los datos. SQLAlchemy, `psycopg[binary]`
 y `python-dotenv` permiten leer PostgreSQL desde Python. Scikit-learn se usa
-para Isolation Forest y sus métricas. Streamlit presenta el dashboard local.
+para Isolation Forest y sus métricas. Streamlit presenta el dashboard tanto de forma local como en la demostración online.
 
-## Lectura de PostgreSQL desde Python
+## PostgreSQL local: almacenamiento y reproducción de experimentos
+
+**Sección opcional para quienes solo quieren probar el dashboard:** la aplicación online y el modo CSV local no requieren instalar PostgreSQL. Estas indicaciones documentan la base utilizada durante el desarrollo y permiten ejecutar la aplicación con base de datos y reproducir los scripts de entrenamiento y evaluación descritos más adelante.
+
 
 Esta etapa usa PostgreSQL 18 local, con el servicio encendido, la base
 `financial_anomalies` y la tabla `public.transacciones` ya creadas e importadas.
@@ -482,7 +499,10 @@ advertencias como errores:
 .\.venv\Scripts\python.exe -W error -m unittest discover -s tests -v
 ```
 
-## Etapa 5: aplicación Streamlit con PostgreSQL o CSV
+## Etapa 5: aplicación Streamlit con CSV o PostgreSQL
+
+Para **probar la aplicación**, se recomienda el modo CSV explicado al principio del README; no es necesario configurar PostgreSQL. La segunda alternativa conserva la conexión de solo lectura utilizada durante el desarrollo.
+
 
 Ejecutar desde la raíz del proyecto, en PowerShell. El diseño y el pipeline son
 los mismos en ambos modos; `DATA_SOURCE` selecciona explícitamente la fuente.
