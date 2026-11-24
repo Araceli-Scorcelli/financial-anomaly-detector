@@ -691,23 +691,19 @@ Los archivos necesarios están versionados: `app.py`, los módulos de `src/`,
 archivo de modelo local. El demo no depende de `.venv`, `.env`, un servidor
 PostgreSQL ni credenciales. Las etiquetas continúan leyéndose después de predecir.
 
-La verificación de despliegue volvió a aprobar las **133 pruebas** con `-W error`,
-ejecutadas secuencialmente en una copia temporal de `git archive HEAD` más los
-tres archivos de preparación modificados, sin `.env`, `.venv` ni Secrets locales.
-Se utilizó el intérprete y las bibliotecas del entorno instalado (Python 3.14.10);
-esto comprueba los recursos versionados, no una instalación nueva en Linux.
-`python -m pip check` no encontró conflictos. Se compararon los bloques TOML del
-tema y de `browser` con Git y resultaron idénticos. Una comprobación con el lector
-real de Secrets de Streamlit y un TOML temporal confirmó que la clave raíz
-selecciona CSV sin leer `.env`, manteniendo `postgres` como valor predeterminado.
+### Verificación y consideraciones de seguridad
 
-Se comprobó la exclusión de `.env`, variantes `.env.*`, Secrets de Streamlit y
-patrones de credenciales/claves mediante `.gitignore` y `git check-ignore`.
-La revisión del historial local cubrió 13 commits (incluidos sus mensajes) y 60 blobs únicos, incluidos
-seis no alcanzables: no se encontraron indicios de secretos reales; las
-coincidencias fueron ejemplos y fixtures explícitamente ficticios. No se leyó ni
-copió el `.env` local. Esta búsqueda heurística no garantiza ausencia absoluta de
-secretos ni cubre referencias remotas no presentes, artefactos o registros externos.
+Durante el desarrollo se realizaron pruebas automatizadas para comprobar la
+preparación de los datos, el entrenamiento, la evaluación del modelo y el
+funcionamiento de la aplicación.
+
+La versión publicada utiliza los archivos sintéticos del repositorio y no
+requiere acceso a una base de datos bancaria ni credenciales de PostgreSQL.
+Los archivos de configuración local que pueden contener información sensible,
+como `.env`, están excluidos del control de versiones.
+
+Estas verificaciones contribuyen a la reproducibilidad del proyecto, aunque
+no sustituyen la comprobación de su funcionamiento en el entorno de despliegue.
 
 ## Etapa 6: evaluación temporal progresiva
 
