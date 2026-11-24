@@ -414,14 +414,14 @@ Las métricas se calculan únicamente sobre evaluación; las etiquetas no ajusta
 referencias, modelo ni umbral. No modifica PostgreSQL, los CSV ni el generador.
 
 El informe muestra cantidades y períodos de ambos conjuntos, las cuentas distintas
-recuperadas, parámetros y umbral, anomalías reales y alertas, y los diez puntajes más altos del período de
+recuperadas, parámetros y umbral, anomalías conocidas y alertas, y los diez puntajes más altos del período de
 evaluación con sus identificadores, fechas, cuentas, características y predicción.
 Para interpretar sus métricas:
 
-- **Verdaderos positivos (TP)**: anomalías reales que recibieron alerta.
+- **Verdaderos positivos (TP)**: anomalías conocidas que recibieron alerta.
 - **Falsos positivos (FP)**: movimientos normales que recibieron alerta y
   requerirían una revisión innecesaria.
-- **Falsos negativos (FN)**: anomalías reales que el modelo omitió.
+- **Falsos negativos (FN)**: anomalías conocidas que el modelo omitió.
 - **Precisión**, `TP / (TP + FP)`: qué proporción de las alertas era anómala.
 - **Recall**, `TP / (TP + FN)`: qué proporción de las anomalías fue detectada.
 - **F1**: media armónica de precisión y recall; resume ambas medidas.
@@ -432,11 +432,17 @@ movimientos normales correctamente descartados. Si una métrica global tiene
 denominador cero, se informa `0` (`zero_division=0`) y debe leerse junto con las
 cantidades de casos.
 
-Para `importe_inusual`, `horario_atipico` y `concentracion` también se muestran
-casos reales, detectados, omitidos y recall. El modelo solo decide normal o
-anómalo: este desglose compara esa decisión con cada tipo real, no clasifica el
-tipo de anomalía. Si un tipo no aparece en evaluación, su recall se informa
-como **N/D**: la ausencia de ejemplos no demuestra éxito ni fracaso.
+Para cada tipo de anomalía incorporada al conjunto sintético (`importe_inusual`,
+`horario_atipico` y `concentracion`), se informa cuántas operaciones estaban
+presentes en los datos de evaluación, cuántas fueron detectadas, cuántas
+quedaron sin identificar y el recall correspondiente.
+
+Isolation Forest no identifica el tipo de anomalía: únicamente señala operaciones
+como potencialmente anómalas. La comparación por tipos se realiza después,
+utilizando las etiquetas conocidas para analizar los resultados.
+
+Si un tipo de anomalía no aparece en el período evaluado, su recall se informa
+como **N/D**, ya que no hay casos de ese tipo para calcularlo.
 
 Los resultados describen un único corte temporal de datos sintéticos. Puede haber
 muy pocos casos por tipo o tipos ausentes, y las anomalías presentes en
@@ -505,16 +511,20 @@ errores: PostgreSQL indisponible continúa mostrando su error de conexión.
 `DATA_SOURCE` controla el dashboard; los comandos de las etapas anteriores
 conservan su funcionamiento original con PostgreSQL.
 
-Abrir [http://localhost:8501](http://localhost:8501) en el navegador. Para detener
-el servidor, presionar **Ctrl+C** en la terminal.
+Una vez iniciado Streamlit, la aplicación puede abrirse desde el navegador en
+[http://localhost:8501](http://localhost:8501). Esta dirección corresponde a una
+ejecución local, por lo que solo estará disponible en la computadora donde se
+haya iniciado el servidor.
+
+Para detener la aplicación, presionar **Ctrl+C** en la terminal.
 
 El dashboard **Financial Anomaly Detector** muestra un resumen de los movimientos
 recuperados, cuentas y tamaños de entrenamiento y evaluación. Todas las cifras
 se calculan con los datos cargados. Sus seis indicadores globales corresponden
-al conjunto completo de evaluación: transacciones, alertas, anomalías reales,
-precisión, recall y F1. Se distribuyen en una grilla de hasta tres columnas que
+al conjunto completo de evaluación: transacciones, alertas, «Anomalías reales»
+(etiquetas sintéticas conocidas), precisión, recall y F1. Se distribuyen en una grilla de hasta tres columnas que
 se adapta al ancho disponible, manteniendo visibles los títulos y porcentajes.
-También advierte sobre la cantidad de casos reales, los
+También advierte sobre la cantidad de anomalías conocidas, los
 falsos positivos y los tipos sin ejemplos de evaluación; el significado y las
 limitaciones de estas métricas son los de la etapa 4B.
 
@@ -530,7 +540,7 @@ muestran separadores de miles y dos decimales; los puntajes, cuatro decimales.
 La sección **Cómo leer las características** explica su significado y aclara que
 describen los movimientos, sin ofrecer una explicación causal de cada alerta.
 Los filtros afectan esa tabla, sus contadores y el gráfico; los seis indicadores
-globales permanecen referidos a toda la evaluación. Las etiquetas reales solo
+globales permanecen referidos a toda la evaluación. Las etiquetas conocidas solo
 intervienen en las métricas históricas: no se usan para filtrar, entrenar ni
 mostrar la tabla operativa.
 
